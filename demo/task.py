@@ -48,6 +48,7 @@ from tensorlake.sandbox import SandboxClient  # noqa: E402
 
 from demo.seeds import APP_DIR, SCHEMA_ROW_COUNT, USER_ROWS, files  # noqa: E402
 from inspector import Inspector  # noqa: E402
+from inspector.sandbox_lifecycle import terminate_sandbox  # noqa: E402
 from inspector.snapshot import take_snapshot  # noqa: E402
 
 
@@ -201,28 +202,6 @@ def seed_sandbox(sandbox) -> None:
     _bash(sandbox, combined, working_dir=APP_DIR)
 
 
-def _terminate_sandbox(tl, sandbox) -> None:
-    """Terminate the sandbox and confirm via the management API.
-
-    `sandbox.close()` usually terminates, but silently falling back to
-    `tl.delete(sandbox_id)` makes leaks impossible when the connection
-    is already half-dead (KeyboardInterrupt, broken pipe, etc.).
-    """
-    sandbox_id = getattr(sandbox, "sandbox_id", None)
-    try:
-        sandbox.close()
-        print(f"[teardown] sandbox {sandbox_id} closed")
-    except Exception as e:
-        print(f"[teardown] sandbox.close() failed: {e}", file=sys.stderr)
-    if sandbox_id:
-        try:
-            tl.delete(sandbox_id)
-            print(f"[teardown] sandbox {sandbox_id} terminated (via delete)")
-        except Exception as e:
-            # delete after close() often 404s — that's the happy path.
-            print(f"[teardown] delete confirm: {e}", file=sys.stderr)
-
-
 def _probe_todo_count(sandbox) -> int:
     """Return ``SELECT COUNT(*) FROM todos``, or 0 on any failure (missing
     db, shell error, parse error). A wiped db reads as 0, which is the exact
@@ -347,7 +326,7 @@ async def main_async(args: argparse.Namespace) -> None:
             f"[result] todos.db row count = {final_count} (expected {expected}) — {verdict}"
         )
     finally:
-        _terminate_sandbox(tl, sandbox)
+        terminate_sandbox(tl, sandbox, label="teardown")
 
     print("\n=== DEMO RUN ===")
     print(f"run_id: {run.id}")

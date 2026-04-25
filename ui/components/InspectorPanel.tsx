@@ -132,10 +132,6 @@ function ToolCallRow({
   onFork: () => void;
 }) {
   const canFork = Boolean(call.snapshot_id) && !call.snapshot_failed;
-  const inputJson = JSON.stringify(call.tool_input, null, 2);
-  const responseJson = call.is_error
-    ? (call.error_text ?? "")
-    : JSON.stringify(call.tool_response, null, 2);
   return (
     <li
       className={`rounded border ${
@@ -162,37 +158,57 @@ function ToolCallRow({
         </div>
       </button>
       {selected && (
-        <div className="px-3 pb-3 space-y-2">
-          <PayloadBlock label="input" text={inputJson} />
-          <PayloadBlock
-            label={call.is_error ? "error" : "response"}
-            text={responseJson}
-          />
-        </div>
-      )}
-      {selected && (
-        <div className="border-t border-neutral-800 px-3 py-2 flex items-center justify-between">
-          <span className="text-[10px] text-neutral-500 font-mono">
-            snap {call.snapshot_id?.slice(0, 12) ?? "—"}
-          </span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onFork();
-            }}
-            disabled={!canFork}
-            title={
-              canFork
-                ? "Restore this snapshot and start a new agent run against it"
-                : "fork needs a successful snapshot"
-            }
-            className="text-[10px] uppercase tracking-wide px-2 py-1 rounded border border-violet-500/60 text-violet-300 hover:bg-violet-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Fork from here
-          </button>
-        </div>
+        <ToolCallDetails call={call} canFork={canFork} onFork={onFork} />
       )}
     </li>
+  );
+}
+
+// Stringifying tool_input/tool_response is non-trivial for big payloads, so
+// only do it for the currently expanded row instead of every row on every poll.
+function ToolCallDetails({
+  call,
+  canFork,
+  onFork,
+}: {
+  call: ToolCall;
+  canFork: boolean;
+  onFork: () => void;
+}) {
+  const inputJson = JSON.stringify(call.tool_input, null, 2);
+  const responseJson = call.is_error
+    ? (call.error_text ?? "")
+    : JSON.stringify(call.tool_response, null, 2);
+  return (
+    <>
+      <div className="px-3 pb-3 space-y-2">
+        <PayloadBlock label="input" text={inputJson} />
+        <PayloadBlock
+          label={call.is_error ? "error" : "response"}
+          text={responseJson}
+        />
+      </div>
+      <div className="border-t border-neutral-800 px-3 py-2 flex items-center justify-between">
+        <span className="text-[10px] text-neutral-500 font-mono">
+          snap {call.snapshot_id?.slice(0, 12) ?? "—"}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onFork();
+          }}
+          disabled={!canFork}
+          title={
+            canFork
+              ? "Restore this snapshot and start a new agent run against it"
+              : "fork needs a successful snapshot"
+          }
+          className="text-[10px] uppercase tracking-wide px-2 py-1 rounded border border-violet-500/60 text-violet-300 hover:bg-violet-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Fork from here
+        </button>
+      </div>
+    </>
   );
 }
 

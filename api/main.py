@@ -26,11 +26,12 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import delete, func
+from sqlalchemy import case, delete, func
 from sqlmodel import col, select
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
+from inspector.sandbox_lifecycle import terminate_sandbox  # noqa: E402
 from inspector.sandbox_tools import MAX_READ_BYTES  # noqa: E402
 from inspector.session import Inspector  # noqa: E402
 from inspector.storage import (  # noqa: E402
@@ -226,22 +227,35 @@ def _parse_json(raw: Optional[str]) -> Any:
         return raw
 
 
-def _tool_call_out(tc: ToolCall) -> ToolCallOut:
+# Projection used by the polled /runs/{id} endpoint. fs_tree_json is intentionally
+# omitted — it can be hundreds of KB per ToolCall and the UI only needs a bool.
+# The dedicated /tool-calls/{id}/fs endpoint loads it on demand.
+_HAS_FS_TREE = case((col(ToolCall.fs_tree_json).is_not(None), True), else_=False).label("has_fs_tree")
+_TOOL_CALL_COLS = (
+    ToolCall.id, ToolCall.turn_id, ToolCall.run_id, ToolCall.call_index,
+    ToolCall.tool_use_id, ToolCall.tool_name, ToolCall.tool_input_json,
+    ToolCall.tool_response_json, ToolCall.error_text, ToolCall.is_error,
+    ToolCall.duration_ms, ToolCall.snapshot_id, ToolCall.snapshot_failed,
+    ToolCall.created_at, _HAS_FS_TREE,
+)
+
+
+def _tool_call_out(row: Any) -> ToolCallOut:
     return ToolCallOut(
-        id=tc.id,
-        turn_id=tc.turn_id,
-        call_index=tc.call_index,
-        tool_use_id=tc.tool_use_id,
-        tool_name=tc.tool_name,
-        tool_input=_parse_json(tc.tool_input_json),
-        tool_response=_parse_json(tc.tool_response_json),
-        error_text=tc.error_text,
-        is_error=tc.is_error,
-        duration_ms=tc.duration_ms,
-        snapshot_id=tc.snapshot_id,
-        snapshot_failed=tc.snapshot_failed,
-        has_fs_tree=bool(tc.fs_tree_json),
-        created_at=tc.created_at.isoformat(),
+        id=row.id,
+        turn_id=row.turn_id,
+        call_index=row.call_index,
+        tool_use_id=row.tool_use_id,
+        tool_name=row.tool_name,
+        tool_input=_parse_json(row.tool_input_json),
+        tool_response=_parse_json(row.tool_response_json),
+        error_text=row.error_text,
+        is_error=row.is_error,
+        duration_ms=row.duration_ms,
+        snapshot_id=row.snapshot_id,
+        snapshot_failed=row.snapshot_failed,
+        has_fs_tree=bool(row.has_fs_tree),
+        created_at=row.created_at.isoformat(),
     )
 
 
@@ -267,11 +281,11 @@ def _turns_by_run(
         .order_by(Turn.turn_index)
     ).all()
     calls = session.exec(
-        select(ToolCall)
+        select(*_TOOL_CALL_COLS)
         .where(col(ToolCall.run_id).in_(run_ids))
         .order_by(ToolCall.call_index, ToolCall.created_at)
     ).all()
-    calls_by_turn: dict[Optional[str], list[ToolCall]] = {}
+    calls_by_turn: dict[Optional[str], list[Any]] = {}
     for c in calls:
         calls_by_turn.setdefault(c.turn_id, []).append(c)
     for t in turns:
@@ -495,21 +509,6 @@ async def fork(
     )
 
 
-def _terminate_sandbox(tl: Any, sandbox: Any, *, label: str) -> None:
-    """Close + delete the sandbox. `delete` after successful close typically
-    404s, which is fine — we want certainty that no sandbox is left running."""
-    sandbox_id = getattr(sandbox, "sandbox_id", None)
-    try:
-        sandbox.close()
-    except Exception as e:
-        print(f"[teardown {label}] sandbox.close() failed: {e}", file=sys.stderr)
-    if sandbox_id:
-        try:
-            tl.delete(sandbox_id)
-        except Exception:
-            pass
-
-
 async def _execute_fork(
     *,
     new_run_id: str,
@@ -559,7 +558,7 @@ async def _execute_fork(
                 s.commit()
     finally:
         if sandbox is not None:
-            _terminate_sandbox(SANDBOX_CACHE.tl_client(), sandbox, label=f"fork {new_run_id}")
+            terminate_sandbox(SANDBOX_CACHE.tl_client(), sandbox, label=f"fork {new_run_id}")
 
 
 @app.delete("/runs")

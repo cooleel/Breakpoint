@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { ForkTimeline } from "@/lib/api";
+import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import {
   CARD_GAP_PX,
   FORK_BUTTON_WIDTH_PX,
@@ -40,10 +41,10 @@ export function ForkTimelineRow({
 }) {
   const isActive = fork.id === selectedRunId;
   const selectedRef = useRef<HTMLButtonElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  // Suppresses the scroll echo when we programmatically set scrollLeft from
-  // shared state — otherwise a clamped value feeds back and fights the user.
-  const isSyncingRef = useRef(false);
+  const containerRef = useSyncedHorizontalScroll<HTMLDivElement>(
+    scrollLeft,
+    onScrollLeftChange,
+  );
 
   useEffect(() => {
     if (!isActive) return;
@@ -53,29 +54,6 @@ export function ForkTimelineRow({
       block: "nearest",
     });
   }, [isActive, selectedTurnId]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (Math.abs(el.scrollLeft - scrollLeft) > 0.5) {
-      isSyncingRef.current = true;
-      el.scrollLeft = scrollLeft;
-      requestAnimationFrame(() => {
-        isSyncingRef.current = false;
-      });
-    }
-  }, [scrollLeft]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handler = () => {
-      if (isSyncingRef.current) return;
-      onScrollLeftChange(el.scrollLeft);
-    };
-    el.addEventListener("scroll", handler, { passive: true });
-    return () => el.removeEventListener("scroll", handler);
-  }, [onScrollLeftChange]);
 
   const arrowLeft = ROW_PADDING_X_PX + indentPx + ARROW_X_OFFSET - scrollLeft;
 

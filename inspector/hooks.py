@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass, field
@@ -97,9 +98,13 @@ async def _persist_tool_call(
     snapshot_failed = False
     if state.sandbox is not None and _should_snapshot(tool_name, state.snapshot_tools):
         try:
-            snap = take_snapshot(state.tl_client, state.sandbox.sandbox_id)
+            # Snapshot (network) and fs walk (multiple list_directory calls)
+            # are independent — overlap them to halve hook latency.
+            snap, tree = await asyncio.gather(
+                asyncio.to_thread(take_snapshot, state.tl_client, state.sandbox.sandbox_id),
+                asyncio.to_thread(walk_fs_tree, state.sandbox),
+            )
             snapshot_id = snap.snapshot_id
-            tree = walk_fs_tree(state.sandbox)
             fs_tree_json = json.dumps(tree)
         except Exception as e:
             snapshot_failed = True
@@ -127,13 +132,20 @@ async def _persist_tool_call(
             )
             s.add(row)
         else:
-            existing.tool_response_json = _safe_json(tool_response) if tool_response is not None else existing.tool_response_json
-            existing.error_text = error_text or existing.error_text
-            existing.is_error = is_error or existing.is_error
-            existing.duration_ms = duration_ms or existing.duration_ms
-            existing.snapshot_id = snapshot_id or existing.snapshot_id
-            existing.fs_tree_json = fs_tree_json or existing.fs_tree_json
-            existing.snapshot_failed = snapshot_failed or existing.snapshot_failed
+            # `is not None` — falsy-but-real values (duration_ms=0, is_error=False)
+            # must overwrite the placeholder row inserted by run_agent.
+            if tool_response is not None:
+                existing.tool_response_json = _safe_json(tool_response)
+            if error_text is not None:
+                existing.error_text = error_text
+            existing.is_error = is_error
+            if duration_ms is not None:
+                existing.duration_ms = duration_ms
+            if snapshot_id is not None:
+                existing.snapshot_id = snapshot_id
+            if fs_tree_json is not None:
+                existing.fs_tree_json = fs_tree_json
+            existing.snapshot_failed = snapshot_failed
             s.add(existing)
         s.commit()
 

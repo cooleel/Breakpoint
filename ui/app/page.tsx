@@ -173,25 +173,13 @@ function Inspector() {
   useEffect(() => {
     let cancelled = false;
     setRunsLoading(true);
-    refreshRuns()
-      .then((rs) => {
-        if (cancelled) return;
-        if (!searchParamsRef.current.get("run") && rs.length > 0) {
-          const first = rs[0];
-          // If the newest run is itself a fork, walk up to the ultimate root
-          // so every ancestor row is rendered above it.
-          if (first.parent_run_id) {
-            updateQuery({ run: findRootRunId(rs, first.id), fork: first.id });
-          } else {
-            updateQuery({ run: first.id });
-          }
-        }
-      })
-      .finally(() => !cancelled && setRunsLoading(false));
+    // Auto-select handled by the runs-driven effect below — once refreshRuns
+    // populates `runs`, it picks the newest one (root or fork).
+    refreshRuns().finally(() => !cancelled && setRunsLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [refreshRuns, updateQuery]);
+  }, [refreshRuns]);
 
   const loadRun = useCallback(
     async (id: string): Promise<RunDetail | null> => {

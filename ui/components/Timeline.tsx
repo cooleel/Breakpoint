@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Turn } from "@/lib/api";
+import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import { TurnCard } from "./TurnCard";
 
 export function Timeline({
@@ -18,11 +19,10 @@ export function Timeline({
   onScrollLeftChange: (scrollLeft: number) => void;
 }) {
   const selectedRef = useRef<HTMLButtonElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  // True while we're programmatically syncing this row's scroll from shared
-  // state — suppresses the echo scroll event that would otherwise clobber
-  // shared state with this row's (possibly clamped) value.
-  const isSyncingRef = useRef(false);
+  const containerRef = useSyncedHorizontalScroll<HTMLDivElement>(
+    scrollLeft,
+    onScrollLeftChange,
+  );
 
   useEffect(() => {
     selectedRef.current?.scrollIntoView({
@@ -31,29 +31,6 @@ export function Timeline({
       block: "nearest",
     });
   }, [selectedTurnId]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    if (Math.abs(el.scrollLeft - scrollLeft) > 0.5) {
-      isSyncingRef.current = true;
-      el.scrollLeft = scrollLeft;
-      requestAnimationFrame(() => {
-        isSyncingRef.current = false;
-      });
-    }
-  }, [scrollLeft]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handler = () => {
-      if (isSyncingRef.current) return;
-      onScrollLeftChange(el.scrollLeft);
-    };
-    el.addEventListener("scroll", handler, { passive: true });
-    return () => el.removeEventListener("scroll", handler);
-  }, [onScrollLeftChange]);
 
   if (turns.length === 0) {
     return (
