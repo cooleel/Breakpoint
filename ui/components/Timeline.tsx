@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Turn } from "@/lib/api";
+import { DiffSummaryEntry, Turn } from "@/lib/api";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import { TurnCard } from "./TurnCard";
 
@@ -11,12 +11,16 @@ export function Timeline({
   onSelectTurn,
   scrollLeft,
   onScrollLeftChange,
+  diffSummary,
+  firstFailureTurnId,
 }: {
   turns: Turn[];
   selectedTurnId: string | null;
   onSelectTurn: (turnId: string) => void;
   scrollLeft: number;
   onScrollLeftChange: (scrollLeft: number) => void;
+  diffSummary?: Map<string, DiffSummaryEntry>;
+  firstFailureTurnId?: string | null;
 }) {
   const selectedRef = useRef<HTMLButtonElement>(null);
   const containerRef = useSyncedHorizontalScroll<HTMLDivElement>(
@@ -55,6 +59,8 @@ export function Timeline({
                 turn={t}
                 selected={selected}
                 ringColor="sky"
+                diffSummary={diffSummary}
+                firstFailure={t.id === firstFailureTurnId}
                 onClick={() => onSelectTurn(t.id)}
               />
             </li>

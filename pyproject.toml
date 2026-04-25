@@ -20,7 +20,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["inspector", "api", "demo"]
+packages = ["inspector", "api", "demo", "tensorlake_tools"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

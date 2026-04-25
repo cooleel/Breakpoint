@@ -46,6 +46,14 @@ export type Turn = {
   tool_calls: ToolCall[];
 };
 
+export type CriticAnalysis = {
+  culprit_tool_call_id: string | null;
+  confidence: "high" | "medium" | "low";
+  root_cause: string;
+  suggested_fix: string;
+  model: string;
+};
+
 export type ForkTimeline = {
   id: string;
   created_at: string;
@@ -55,6 +63,7 @@ export type ForkTimeline = {
   parent_run_id: string;
   parent_turn_index: number | null;
   turns: Turn[];
+  critic_analysis: CriticAnalysis | null;
 };
 
 export type RunDetail = {
@@ -68,6 +77,7 @@ export type RunDetail = {
   root_sandbox_id: string | null;
   turns: Turn[];
   forks: ForkTimeline[];
+  critic_analysis: CriticAnalysis | null;
 };
 
 export type ForkResponse = {
@@ -96,6 +106,28 @@ export type FileResponse = {
   content: string;
 };
 
+export type DiffResponse = {
+  tool_call_id: string;
+  against_tool_call_id: string | null;
+  added: string[];
+  removed: string[];
+  modified: string[];
+  truncated: boolean;
+};
+
+export type DiffSummaryEntry = {
+  tool_call_id: string;
+  against_tool_call_id: string | null;
+  added: number;
+  removed: number;
+  modified: number;
+};
+
+export type DemoMode = {
+  demo_mode: boolean;
+  message: string | null;
+};
+
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     cache: "no-store",
@@ -120,6 +152,14 @@ export const api = {
     j<FileResponse>(
       `${API_BASE}/tool-calls/${toolCallId}/file?path=${encodeURIComponent(path)}`,
     ),
+  getDiff: (toolCallId: string, against?: string) =>
+    j<DiffResponse>(
+      `${API_BASE}/tool-calls/${toolCallId}/diff${
+        against ? `?against=${encodeURIComponent(against)}` : ""
+      }`,
+    ),
+  getDiffSummary: (runId: string) =>
+    j<DiffSummaryEntry[]>(`${API_BASE}/runs/${runId}/diff-summary`),
   fork: (
     toolCallId: string,
     body: { system_prompt?: string; user_message?: string },
@@ -128,4 +168,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  findBreakpoint: (runId: string) =>
+    j<CriticAnalysis>(`${API_BASE}/runs/${runId}/find-breakpoint`, {
+      method: "POST",
+    }),
+  getDemoMode: () => j<DemoMode>(`${API_BASE}/demo-mode`),
 };

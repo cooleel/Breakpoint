@@ -25,6 +25,7 @@ class Run(SQLModel, table=True):
     root_sandbox_id: Optional[str] = None
     parent_run_id: Optional[str] = Field(default=None, foreign_key="run.id")
     forked_from_tool_call_id: Optional[str] = Field(default=None, foreign_key="toolcall.id")
+    critic_analysis_json: Optional[str] = None
 
 
 class Turn(SQLModel, table=True):
@@ -63,6 +64,13 @@ def init_db(db_path: str):
     global _engine
     _engine = create_engine(f"sqlite:///{db_path}", echo=False)
     SQLModel.metadata.create_all(_engine)
+    # Lightweight forward-only migrations for columns added after the initial
+    # schema. SQLModel.metadata.create_all only creates tables, never alters
+    # existing ones — so on an existing DB we have to ALTER TABLE ourselves.
+    with _engine.begin() as conn:
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(run)")}
+        if "critic_analysis_json" not in cols:
+            conn.exec_driver_sql("ALTER TABLE run ADD COLUMN critic_analysis_json TEXT")
     return _engine
 
 

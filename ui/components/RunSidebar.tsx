@@ -9,6 +9,7 @@ export function RunSidebar({
   onClearAll,
   loading,
   error,
+  demo,
 }: {
   runs: RunSummary[];
   selectedRunId: string | null;
@@ -16,6 +17,7 @@ export function RunSidebar({
   onClearAll: () => void;
   loading: boolean;
   error: string | null;
+  demo: { tooltip: string } | null;
 }) {
   return (
     <aside className="w-64 shrink-0 border-r border-neutral-800 bg-neutral-950 flex flex-col">
@@ -32,9 +34,9 @@ export function RunSidebar({
                 onClearAll();
               }
             }}
-            disabled={runs.length === 0}
+            disabled={runs.length === 0 || !!demo}
             className="text-[10px] uppercase tracking-wide px-2 py-1 rounded border border-neutral-700 text-neutral-400 hover:border-red-500 hover:text-red-300 disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Delete all runs"
+            title={demo ? demo.tooltip : "Delete all runs"}
           >
             Clear
           </button>

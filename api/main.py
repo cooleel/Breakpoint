@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
+import anyio
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,13 @@ from sqlmodel import col, select
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
+from inspector.critic import find_breakpoint  # noqa: E402
+from inspector.diff import (  # noqa: E402
+    diff_flat_files,
+    diff_trees,
+    flatten_files,
+    summarize_diff,
+)
 from inspector.sandbox_lifecycle import terminate_sandbox  # noqa: E402
 from inspector.sandbox_tools import MAX_READ_BYTES  # noqa: E402
 from inspector.session import Inspector  # noqa: E402
@@ -46,6 +54,21 @@ from inspector.storage import (  # noqa: E402
 DB_PATH = os.environ.get("AGENT_INSPECTOR_DB", "inspector.db")
 FORK_MODEL = os.environ.get("AGENT_INSPECTOR_FORK_MODEL", "claude-sonnet-4-6")
 FORK_MAX_TURNS = int(os.environ.get("AGENT_INSPECTOR_FORK_MAX_TURNS", "10"))
+# Demo mode serves a baked-in DB without API keys: blocks endpoints that would
+# need a live Tensorlake restore (file reads, forks) or a live Anthropic call
+# (find-breakpoint — cached analysis on the row keeps the card renderable),
+# and locks the dataset so a curious visitor can't wipe it.
+DEMO_MODE = os.environ.get("AGENT_INSPECTOR_DEMO_MODE", "").strip() in ("1", "true", "yes")
+DEMO_MESSAGE = (
+    "demo mode: this action is disabled. clone the repo and run with your own "
+    "ANTHROPIC_API_KEY + TENSORLAKE_API_KEY to enable forks, file previews, and "
+    "live breakpoint analysis."
+)
+
+
+def _require_live() -> None:
+    if DEMO_MODE:
+        raise HTTPException(status_code=503, detail=DEMO_MESSAGE)
 
 
 class _SandboxCache:
@@ -179,6 +202,15 @@ class ForkTimeline(BaseModel):
     # sums this along the parent chain to get the absolute column offset.
     parent_turn_index: Optional[int]
     turns: list[TurnOut]
+    critic_analysis: Optional["CriticAnalysisOut"] = None
+
+
+class CriticAnalysisOut(BaseModel):
+    culprit_tool_call_id: Optional[str]
+    confidence: str
+    root_cause: str
+    suggested_fix: str
+    model: str
 
 
 class RunDetail(BaseModel):
@@ -192,6 +224,7 @@ class RunDetail(BaseModel):
     root_sandbox_id: Optional[str]
     turns: list[TurnOut]
     forks: list[ForkTimeline] = []
+    critic_analysis: Optional[CriticAnalysisOut] = None
 
 
 class FileResponse(BaseModel):
@@ -225,6 +258,24 @@ def _parse_json(raw: Optional[str]) -> Any:
         return json.loads(raw)
     except Exception:
         return raw
+
+
+def _critic_out(blob: Optional[str]) -> Optional["CriticAnalysisOut"]:
+    if not blob:
+        return None
+    try:
+        d = json.loads(blob)
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    return CriticAnalysisOut(
+        culprit_tool_call_id=d.get("culprit_tool_call_id"),
+        confidence=str(d.get("confidence") or "low"),
+        root_cause=str(d.get("root_cause") or ""),
+        suggested_fix=str(d.get("suggested_fix") or ""),
+        model=str(d.get("model") or ""),
+    )
 
 
 # Projection used by the polled /runs/{id} endpoint. fs_tree_json is intentionally
@@ -299,6 +350,25 @@ def _turns_by_run(
                 duration_ms=t.duration_ms,
                 created_at=t.created_at.isoformat(),
                 tool_calls=[_tool_call_out(c) for c in calls_by_turn.get(t.id, [])],
+            )
+        )
+    # Framework-agnostic flows (tensorlake_tools) record ToolCalls without
+    # Turns. Surface each orphan as a synthetic "step N" card so the existing
+    # timeline UI keeps working without per-framework branches. The "step-"
+    # prefix is a sentinel so the UI never confuses these with real Turn ids
+    # (e.g., for endpoints that look up turns by id).
+    for c in calls_by_turn.get(None, []):
+        bucket = out.setdefault(c.run_id, [])
+        bucket.append(
+            TurnOut(
+                id=f"step-{c.id}",
+                turn_index=len(bucket),
+                reasoning_text="",
+                assistant_text="",
+                stop_reason=None,
+                duration_ms=c.duration_ms,
+                created_at=c.created_at.isoformat(),
+                tool_calls=[_tool_call_out(c)],
             )
         )
     return out
@@ -399,6 +469,7 @@ def get_run(run_id: str) -> RunDetail:
                         parent_run_id=child.parent_run_id or "",
                         parent_turn_index=pti,
                         turns=turns_by_run.get(child.id, []),
+                        critic_analysis=_critic_out(child.critic_analysis_json),
                     )
                 )
                 _walk(child.id)
@@ -416,7 +487,122 @@ def get_run(run_id: str) -> RunDetail:
             root_sandbox_id=run.root_sandbox_id,
             turns=turn_outs,
             forks=fork_timelines,
+            critic_analysis=_critic_out(run.critic_analysis_json),
         )
+
+
+class DiffResponse(BaseModel):
+    tool_call_id: str
+    against_tool_call_id: Optional[str]
+    added: list[str]
+    removed: list[str]
+    modified: list[str]
+    truncated: bool
+
+
+class DiffSummaryEntry(BaseModel):
+    tool_call_id: str
+    against_tool_call_id: Optional[str]
+    added: int
+    removed: int
+    modified: int
+
+
+def _parse_fs_tree(blob: Optional[str]) -> Any:
+    if not blob:
+        return None
+    try:
+        return json.loads(blob)
+    except Exception:
+        return None
+
+
+@app.get("/tool-calls/{tool_call_id}/diff", response_model=DiffResponse)
+def get_diff(
+    tool_call_id: str,
+    against: Optional[str] = Query(
+        None,
+        description="prev tool_call id; defaults to the previous tool call in the same run",
+    ),
+) -> DiffResponse:
+    tc = _get_tool_call(tool_call_id)
+    new_tree = _parse_fs_tree(tc.fs_tree_json)
+    if new_tree is None:
+        raise HTTPException(
+            status_code=404, detail="tool call has no fs tree to diff"
+        )
+    with get_session() as s:
+        prev_tc: Optional[ToolCall]
+        if against:
+            prev_tc = s.get(ToolCall, against)
+            if prev_tc is None:
+                raise HTTPException(
+                    status_code=404, detail="against tool call not found"
+                )
+        else:
+            prev_tc = s.exec(
+                select(ToolCall)
+                .where(ToolCall.run_id == tc.run_id)
+                .where(ToolCall.call_index < tc.call_index)
+                .where(col(ToolCall.fs_tree_json).is_not(None))
+                .order_by(ToolCall.call_index.desc())
+                .limit(1)
+            ).first()
+        old_tree = _parse_fs_tree(prev_tc.fs_tree_json) if prev_tc else None
+    d = diff_trees(old_tree, new_tree)
+    return DiffResponse(
+        tool_call_id=tc.id,
+        against_tool_call_id=prev_tc.id if prev_tc else None,
+        added=d["added"],
+        removed=d["removed"],
+        modified=d["modified"],
+        truncated=d["truncated"],
+    )
+
+
+@app.get("/runs/{run_id}/diff-summary", response_model=list[DiffSummaryEntry])
+def get_diff_summary(run_id: str) -> list[DiffSummaryEntry]:
+    with get_session() as s:
+        run = s.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        rows = s.exec(
+            select(ToolCall.id, ToolCall.call_index, ToolCall.fs_tree_json)
+            .where(ToolCall.run_id == run_id)
+            .order_by(ToolCall.call_index, ToolCall.created_at)
+        ).all()
+    out: list[DiffSummaryEntry] = []
+    prev_id: Optional[str] = None
+    prev_files: dict[str, int | None] = {}
+    for row in rows:
+        tree = _parse_fs_tree(row.fs_tree_json)
+        # Rows without fs data still get a zero entry so the UI can key by
+        # tool_call_id without missing rows.
+        if tree is None:
+            out.append(
+                DiffSummaryEntry(
+                    tool_call_id=row.id,
+                    against_tool_call_id=prev_id,
+                    added=0,
+                    removed=0,
+                    modified=0,
+                )
+            )
+            continue
+        cur_files = flatten_files(tree)
+        counts = summarize_diff(diff_flat_files(prev_files, cur_files))
+        out.append(
+            DiffSummaryEntry(
+                tool_call_id=row.id,
+                against_tool_call_id=prev_id,
+                added=counts["added"],
+                removed=counts["removed"],
+                modified=counts["modified"],
+            )
+        )
+        prev_id = row.id
+        prev_files = cur_files
+    return out
 
 
 @app.get("/tool-calls/{tool_call_id}/fs")
@@ -435,6 +621,7 @@ def get_file(
     tool_call_id: str,
     path: str = Query(..., description="absolute path inside the sandbox"),
 ) -> FileResponse:
+    _require_live()
     tc = _get_tool_call(tool_call_id)
     if not tc.snapshot_id:
         raise HTTPException(
@@ -461,6 +648,7 @@ async def fork(
     """Restore the snapshot into a fresh sandbox, persist a new Run, and run
     the agent in a background task. The response returns immediately with the
     new run_id — the client polls GET /runs/{id} to watch the fork execute."""
+    _require_live()
     tc = _get_tool_call(tool_call_id)
     if not tc.snapshot_id:
         raise HTTPException(
@@ -561,10 +749,42 @@ async def _execute_fork(
             terminate_sandbox(SANDBOX_CACHE.tl_client(), sandbox, label=f"fork {new_run_id}")
 
 
+@app.post("/runs/{run_id}/find-breakpoint", response_model=CriticAnalysisOut)
+async def post_find_breakpoint(run_id: str) -> CriticAnalysisOut:
+    """Have Opus 4.7 read the run's full trajectory and identify the causal
+    tool call. Persists the analysis on the Run row so the next /runs/{id}
+    poll picks it up; returns it directly so the UI can render immediately
+    without a refetch."""
+    _require_live()
+    with get_session() as s:
+        run = s.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+
+    # Run the synchronous Anthropic call off the event loop so we don't block
+    # the polling endpoint from servicing other requests during the wait.
+    try:
+        analysis = await anyio.to_thread.run_sync(find_breakpoint, run_id)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"critic failed: {e}")
+
+    with get_session() as s:
+        run = s.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run vanished")
+        run.critic_analysis_json = json.dumps(analysis)
+        s.add(run)
+        s.commit()
+
+    return CriticAnalysisOut(**analysis)
+
+
 @app.delete("/runs")
 def delete_all_runs() -> dict:
     """Wipe every run, turn, and tool call from the DB. Cached restored
     sandboxes are also closed since their snapshot ids are now orphaned."""
+    _require_live()
     with get_session() as s:
         # Children first so FKs (Turn.run_id, ToolCall.turn_id/run_id, and
         # Run.forked_from_tool_call_id) don't trip on referenced rows. These
@@ -579,4 +799,18 @@ def delete_all_runs() -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "db": DB_PATH}
+    return {"ok": True, "db": DB_PATH, "demo_mode": DEMO_MODE}
+
+
+class DemoModeOut(BaseModel):
+    demo_mode: bool
+    message: Optional[str] = None
+
+
+@app.get("/demo-mode", response_model=DemoModeOut)
+def demo_mode() -> DemoModeOut:
+    """Lets the UI render a demo badge and disable actions that would 503."""
+    return DemoModeOut(
+        demo_mode=DEMO_MODE,
+        message=DEMO_MESSAGE if DEMO_MODE else None,
+    )

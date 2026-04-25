@@ -34,8 +34,8 @@ ALLOWED_TOOL_IDS: list[str] = [
 
 
 MAX_READ_BYTES = 500_000
-_MAX_STDOUT_CHARS = 20_000
-_BASH_TIMEOUT_S = 120.0
+MAX_STDOUT_CHARS = 20_000
+BASH_TIMEOUT_S = 120.0
 
 
 def build_sandbox_mcp_server(sandbox: Any):
@@ -93,15 +93,15 @@ def build_sandbox_mcp_server(sandbox: Any):
                 "bash",
                 ["-c", command],
                 working_dir=working_dir,
-                timeout=_BASH_TIMEOUT_S,
+                timeout=BASH_TIMEOUT_S,
             )
         except Exception as e:
             return {
                 "content": [{"type": "text", "text": f"bash failed: {e}"}],
                 "is_error": True,
             }
-        stdout = (result.stdout or "")[:_MAX_STDOUT_CHARS]
-        stderr = (result.stderr or "")[:_MAX_STDOUT_CHARS]
+        stdout = (result.stdout or "")[:MAX_STDOUT_CHARS]
+        stderr = (result.stderr or "")[:MAX_STDOUT_CHARS]
         body = f"exit_code={result.exit_code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
         return {
             "content": [{"type": "text", "text": body}],

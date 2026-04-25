@@ -3,7 +3,16 @@
 import dynamic from "next/dynamic";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { api, ForkTimeline, RunDetail, RunSummary, ToolCall, Turn } from "@/lib/api";
+import {
+  api,
+  CriticAnalysis,
+  DiffSummaryEntry,
+  ForkTimeline,
+  RunDetail,
+  RunSummary,
+  ToolCall,
+  Turn,
+} from "@/lib/api";
 import { RunSidebar } from "@/components/RunSidebar";
 import { Timeline } from "@/components/Timeline";
 import { InspectorPanel } from "@/components/InspectorPanel";
@@ -11,6 +20,7 @@ import { FilePreview } from "@/components/FilePreview";
 import { ForkModal } from "@/components/ForkModal";
 import { ForkTimelineRow } from "@/components/ForkTimelineRow";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { BreakpointCard, BreakpointCulprit } from "@/components/BreakpointCard";
 import {
   CARD_GAP_PX,
   CARD_WIDTH_PX,
@@ -24,6 +34,20 @@ const FsTree = dynamic(
 );
 
 const POLL_INTERVAL_MS = 1000;
+
+// First turn that contains a failed tool call (and the failed call's id).
+// Drives "open at the smoking gun" default selection and the red pip on the
+// timeline card.
+function findFirstFailure(
+  turns: Turn[],
+): { turnId: string; toolCallId: string } | null {
+  for (const t of turns) {
+    for (const c of t.tool_calls) {
+      if (c.is_error) return { turnId: t.id, toolCallId: c.id };
+    }
+  }
+  return null;
+}
 
 // Walk up RunSummary.parent_run_id chain to the ultimate root. Falls back to
 // `id` if the chain can't be resolved (e.g. runs list not yet loaded).
@@ -67,6 +91,31 @@ function Inspector() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [runsError, setRunsError] = useState<string | null>(null);
+  // Demo mode disables fork + find-breakpoint actions (cached analyses still
+  // render). Null = live mode; an object = demo, with the tooltip ready to
+  // render. Fetched once on mount; stays null if the endpoint is missing on
+  // older backends.
+  const [demo, setDemo] = useState<{ tooltip: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getDemoMode()
+      .then((d) => {
+        if (cancelled) return;
+        if (d.demo_mode) {
+          setDemo({
+            tooltip:
+              d.message ??
+              "demo mode: action disabled (no API keys configured)",
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [run, setRun] = useState<RunDetail | null>(null);
   const [runLoading, setRunLoading] = useState(false);
@@ -74,6 +123,24 @@ function Inspector() {
 
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [forkTarget, setForkTarget] = useState<ToolCall | null>(null);
+  // When the user clicks "Fork from breakpoint with fix", we precompute the
+  // system prompt (parent prompt + Opus's suggested fix) and stash it here so
+  // ForkModal renders with it pre-filled. Reset on modal close.
+  const [forkSystemPromptOverride, setForkSystemPromptOverride] = useState<
+    string | null
+  >(null);
+  const [findingBreakpointForRunId, setFindingBreakpointForRunId] = useState<
+    string | null
+  >(null);
+  const [findBreakpointError, setFindBreakpointError] = useState<string | null>(
+    null,
+  );
+  // Per-row dismissal of the breakpoint card (in-memory only). Cleared
+  // implicitly when /runs/{id} is refetched and a new analysis arrives, since
+  // the new card is keyed off the analysis identity.
+  const [dismissedAnalysis, setDismissedAnalysis] = useState<Set<string>>(
+    new Set(),
+  );
   // While true, selection auto-advances to the newest turn of the active row
   // as polling brings in new data. Turned off the moment the user manually
   // picks a turn/tool (or arrow-key navigates) so we don't yank them away
@@ -217,10 +284,15 @@ function Inspector() {
         const currentTurn = searchParamsRef.current.get("turn");
         const hasTurn = currentTurn && turns.some((t) => t.id === currentTurn);
         if (!hasTurn && turns.length > 0) {
-          // Start on the latest turn, not the first — for a running task the
-          // user almost always wants to see the most recent state, and for a
-          // completed task the end-state is the interesting one.
-          updateQuery({ turn: turns[turns.length - 1].id, tool: null });
+          // Open at the smoking gun if there is one — otherwise the latest
+          // turn (live progress for running tasks, end-state for completed).
+          const fft = findFirstFailure(turns);
+          if (fft) {
+            setFollowLatest(false);
+            updateQuery({ turn: fft.turnId, tool: fft.toolCallId });
+          } else {
+            updateQuery({ turn: turns[turns.length - 1].id, tool: null });
+          }
         }
       })
       .finally(() => !cancelled && setRunLoading(false));
@@ -275,6 +347,63 @@ function Inspector() {
     if (!run || !forkId) return null;
     return run.forks.find((f) => f.id === forkId) ?? null;
   }, [run, forkId]);
+
+  // Per-row first-failure markers, keyed by run id (parent or fork). Drives
+  // both the red pip on TurnCards and the "Jump to first failure" header
+  // button for the active row.
+  const firstFailureByRunId = useMemo(() => {
+    const m = new Map<string, { turnId: string; toolCallId: string }>();
+    if (!run) return m;
+    const parentFft = findFirstFailure(run.turns);
+    if (parentFft) m.set(run.id, parentFft);
+    for (const f of run.forks) {
+      const fft = findFirstFailure(f.turns);
+      if (fft) m.set(f.id, fft);
+    }
+    return m;
+  }, [run]);
+
+  // Tool-call ids are globally unique, so one flat map covers parent + forks.
+  const [diffByToolCallId, setDiffByToolCallId] = useState<
+    Map<string, DiffSummaryEntry>
+  >(new Map());
+
+  // Refetch only when the set of tool calls actually changes — diff data is
+  // append-only, so polling on status/duration tick changes would just spam
+  // the API at 1Hz with identical results.
+  const diffSummaryKey = useMemo(() => {
+    if (!run) return null;
+    const count = (turns: Turn[]) =>
+      turns.reduce((n, t) => n + t.tool_calls.length, 0);
+    const parts = [`${run.id}:${count(run.turns)}`];
+    for (const f of run.forks) parts.push(`${f.id}:${count(f.turns)}`);
+    return parts.join("|");
+  }, [run]);
+
+  useEffect(() => {
+    const r = runRef.current;
+    if (!r) {
+      setDiffByToolCallId(new Map());
+      return;
+    }
+    let cancelled = false;
+    const targets = [r.id, ...r.forks.map((f) => f.id)];
+    Promise.all(
+      targets.map((id) =>
+        api.getDiffSummary(id).catch(() => [] as DiffSummaryEntry[]),
+      ),
+    ).then((lists) => {
+      if (cancelled) return;
+      const m = new Map<string, DiffSummaryEntry>();
+      for (const list of lists) {
+        for (const e of list) m.set(e.tool_call_id, e);
+      }
+      setDiffByToolCallId(m);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [diffSummaryKey]);
 
   // Pixel x-offset of each fork's "↳ fork" button from the row's left
   // padding, summed along the parent chain. Root-anchored forks indent by
@@ -390,6 +519,7 @@ function Inspector() {
       }
 
       if (e.key === "f" || e.key === "F") {
+        if (demo) return;
         const call = effectiveToolCallRef.current;
         if (!call || !call.snapshot_id || call.snapshot_failed) return;
         e.preventDefault();
@@ -409,7 +539,7 @@ function Inspector() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [updateQuery]);
+  }, [updateQuery, demo]);
 
   const onClearAll = useCallback(async () => {
     try {
@@ -456,10 +586,16 @@ function Inspector() {
   );
   const onSelectForkRun = useCallback(
     (id: string) => {
-      setFollowLatest(true);
-      updateQuery({ fork: id, turn: null, tool: null });
+      const fft = firstFailureByRunId.get(id);
+      if (fft) {
+        setFollowLatest(false);
+        updateQuery({ fork: id, turn: fft.turnId, tool: fft.toolCallId });
+      } else {
+        setFollowLatest(true);
+        updateQuery({ fork: id, turn: null, tool: null });
+      }
     },
-    [updateQuery],
+    [firstFailureByRunId, updateQuery],
   );
   const onSelectForkTurn = useCallback(
     (id: string) => {
@@ -480,6 +616,109 @@ function Inspector() {
   const activeRunId = forkId ?? runId;
   const activeSelectionInParent = !forkId;
   const selectedTurnId = turnId;
+
+  const activeFirstFailure = activeRunId
+    ? firstFailureByRunId.get(activeRunId) ?? null
+    : null;
+  const onJumpToFirstFailure = useCallback(() => {
+    if (!activeFirstFailure) return;
+    setFollowLatest(false);
+    updateQuery({
+      turn: activeFirstFailure.turnId,
+      tool: activeFirstFailure.toolCallId,
+    });
+  }, [activeFirstFailure, updateQuery]);
+
+  const activeAnalysis: CriticAnalysis | null = activeFork
+    ? activeFork.critic_analysis
+    : run?.critic_analysis ?? null;
+
+  // Resolved (turn, tool) pair for the analysis's culprit_tool_call_id, plus
+  // whether the snapshot is forkable. Lifted from BreakpointCard so the card
+  // doesn't need to take the whole turn list, and so onForkFromBreakpoint
+  // doesn't have to re-walk it.
+  const breakpointCulprit: BreakpointCulprit | null = useMemo(() => {
+    const culpritId = activeAnalysis?.culprit_tool_call_id;
+    if (!culpritId) return null;
+    const turns = activeFork ? activeFork.turns : run?.turns ?? [];
+    for (const t of turns) {
+      const tc = t.tool_calls.find((c) => c.id === culpritId);
+      if (tc) {
+        return {
+          turnId: t.id,
+          turnIndex: t.turn_index,
+          toolCallId: tc.id,
+          canFork: !!tc.snapshot_id && !tc.snapshot_failed,
+        };
+      }
+    }
+    return null;
+  }, [activeAnalysis, activeFork, run]);
+
+  // Keyed by `<runId>:<root_cause>` so a regenerate (new wording) shows again
+  // after a previous dismissal.
+  const analysisKey =
+    activeRunId && activeAnalysis
+      ? `${activeRunId}:${activeAnalysis.root_cause}`
+      : null;
+  const showBreakpointCard =
+    !!activeAnalysis && !!analysisKey && !dismissedAnalysis.has(analysisKey);
+
+  const onFindBreakpoint = useCallback(async () => {
+    if (!activeRunId) return;
+    setFindingBreakpointForRunId(activeRunId);
+    setFindBreakpointError(null);
+    try {
+      await api.findBreakpoint(activeRunId);
+      // Polling may be paused (run done, no forks running) — fetch eagerly so
+      // the card lands without waiting for a tick that may never come.
+      if (runId) await loadRun(runId);
+    } catch (e) {
+      setFindBreakpointError(String(e));
+    } finally {
+      setFindingBreakpointForRunId((cur) =>
+        cur === activeRunId ? null : cur,
+      );
+    }
+  }, [activeRunId, loadRun, runId]);
+
+  const onJumpToBreakpoint = useCallback(
+    (jumpTurnId: string, jumpToolCallId: string) => {
+      setFollowLatest(false);
+      updateQuery({ turn: jumpTurnId, tool: jumpToolCallId });
+    },
+    [updateQuery],
+  );
+
+  const onForkFromBreakpoint = useCallback(
+    (jumpTurnId: string, jumpToolCallId: string) => {
+      if (!run || !activeAnalysis || !breakpointCulprit?.canFork) return;
+      const turns = activeFork ? activeFork.turns : run.turns;
+      const turn = turns.find((t) => t.id === jumpTurnId);
+      const culprit = turn?.tool_calls.find((c) => c.id === jumpToolCallId);
+      if (!culprit) return;
+      const fixed = `${run.system_prompt}\n\nIMPORTANT — corrective guidance from breakpoint analysis: ${activeAnalysis.suggested_fix}`;
+      setForkSystemPromptOverride(fixed);
+      setForkTarget(culprit);
+    },
+    [run, activeFork, activeAnalysis, breakpointCulprit],
+  );
+
+  const onDismissBreakpoint = useCallback(() => {
+    if (!analysisKey) return;
+    setDismissedAnalysis((prev) => {
+      const next = new Set(prev);
+      next.add(analysisKey);
+      return next;
+    });
+  }, [analysisKey]);
+
+  const findBreakpointLabel =
+    findingBreakpointForRunId === activeRunId
+      ? "Opus is reading…"
+      : activeAnalysis
+        ? "Re-analyze"
+        : "Find the breakpoint";
 
   const onForked = useCallback(
     async (res: { run_id: string; parent_run_id: string }) => {
@@ -510,15 +749,51 @@ function Inspector() {
         onClearAll={onClearAll}
         loading={runsLoading}
         error={runsError}
+        demo={demo}
       />
       <main className="flex-1 flex flex-col min-w-0">
         <header className="px-6 py-3 border-b border-neutral-800 flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold">Agent Inspector</h2>
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-sm font-semibold">Agent Inspector</h2>
+            {demo && (
+              <span
+                title={demo.tooltip}
+                className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-amber-400/70 text-amber-200 bg-amber-500/15"
+              >
+                demo mode
+              </span>
+            )}
+          </div>
           <div className="text-[10px] uppercase tracking-wide text-neutral-500 flex gap-3 items-center">
             {run && <span>{run.id.slice(0, 8)}</span>}
             {run && <span>· {run.turns.length} turns</span>}
             {run && run.forks.length > 0 && (
               <span>· {run.forks.length} fork{run.forks.length === 1 ? "" : "s"}</span>
+            )}
+            {activeFirstFailure && (
+              <button
+                type="button"
+                onClick={onJumpToFirstFailure}
+                className="ml-2 px-2 py-0.5 rounded border border-red-500/70 text-red-300 bg-red-500/10 hover:bg-red-500/20 normal-case tracking-normal"
+                title="Open the first failed tool call in this row"
+              >
+                Jump to first failure
+              </button>
+            )}
+            {activeFirstFailure && (
+              <button
+                type="button"
+                onClick={onFindBreakpoint}
+                disabled={findingBreakpointForRunId === activeRunId || !!demo}
+                className="px-2 py-0.5 rounded border border-violet-400/70 text-violet-100 bg-violet-500/15 hover:bg-violet-500/25 normal-case tracking-normal disabled:opacity-60 disabled:cursor-not-allowed"
+                title={
+                  demo
+                    ? demo.tooltip
+                    : "Have Opus 4.7 read the trajectory and identify the root cause"
+                }
+              >
+                {findBreakpointLabel}
+              </button>
             )}
             <span>· ← / → scrub · F fork · Esc close</span>
             <button
@@ -537,6 +812,21 @@ function Inspector() {
             {runError}
           </div>
         )}
+        {findBreakpointError && (
+          <div className="px-6 py-2 text-xs text-red-400 whitespace-pre-wrap border-b border-neutral-800">
+            breakpoint analysis failed: {findBreakpointError}
+          </div>
+        )}
+        {run && showBreakpointCard && activeAnalysis && (
+          <BreakpointCard
+            analysis={activeAnalysis}
+            culprit={breakpointCulprit}
+            onJump={onJumpToBreakpoint}
+            onFork={onForkFromBreakpoint}
+            onDismiss={onDismissBreakpoint}
+            demo={demo}
+          />
+        )}
         {run && (
           <div
             ref={rowsRef}
@@ -551,6 +841,10 @@ function Inspector() {
                 onSelectTurn={onSelectParentTurn}
                 scrollLeft={timelineScrollLeft}
                 onScrollLeftChange={setTimelineScrollLeft}
+                diffSummary={diffByToolCallId}
+                firstFailureTurnId={
+                  firstFailureByRunId.get(run.id)?.turnId ?? null
+                }
               />
             </ErrorBoundary>
             {run.forks.map((f) => (
@@ -564,6 +858,10 @@ function Inspector() {
                   onSelectTurn={onSelectForkTurn}
                   scrollLeft={timelineScrollLeft}
                   onScrollLeftChange={setTimelineScrollLeft}
+                  diffSummary={diffByToolCallId}
+                  firstFailureTurnId={
+                    firstFailureByRunId.get(f.id)?.turnId ?? null
+                  }
                 />
               </ErrorBoundary>
             ))}
@@ -603,6 +901,8 @@ function Inspector() {
                   selectedToolCallId={toolCallId}
                   onSelectToolCall={onSelectToolCall}
                   onFork={setForkTarget}
+                  onOpenPath={setPreviewPath}
+                  demo={demo}
                 />
               </ErrorBoundary>
             </div>
@@ -612,9 +912,15 @@ function Inspector() {
       {forkTarget && run && (
         <ForkModal
           toolCall={forkTarget}
-          defaultSystemPrompt={run.system_prompt}
-          onClose={() => setForkTarget(null)}
-          onForked={onForked}
+          defaultSystemPrompt={forkSystemPromptOverride ?? run.system_prompt}
+          onClose={() => {
+            setForkTarget(null);
+            setForkSystemPromptOverride(null);
+          }}
+          onForked={(res) => {
+            setForkSystemPromptOverride(null);
+            onForked(res);
+          }}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ForkTimeline } from "@/lib/api";
+import { DiffSummaryEntry, ForkTimeline } from "@/lib/api";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import {
   CARD_GAP_PX,
@@ -26,6 +26,8 @@ export function ForkTimelineRow({
   onSelectTurn,
   scrollLeft,
   onScrollLeftChange,
+  diffSummary,
+  firstFailureTurnId,
 }: {
   fork: ForkTimeline;
   // Absolute x offset (in px) of the fork's "↳ fork" button from the row's
@@ -38,6 +40,8 @@ export function ForkTimelineRow({
   onSelectTurn: (turnId: string) => void;
   scrollLeft: number;
   onScrollLeftChange: (scrollLeft: number) => void;
+  diffSummary?: Map<string, DiffSummaryEntry>;
+  firstFailureTurnId?: string | null;
 }) {
   const isActive = fork.id === selectedRunId;
   const selectedRef = useRef<HTMLButtonElement>(null);
@@ -118,6 +122,8 @@ export function ForkTimelineRow({
                 turn={t}
                 selected={selected}
                 ringColor="violet"
+                diffSummary={diffSummary}
+                firstFailure={t.id === firstFailureTurnId}
                 onClick={() => {
                   if (!isActive) onSelectRun(fork.id);
                   onSelectTurn(t.id);
