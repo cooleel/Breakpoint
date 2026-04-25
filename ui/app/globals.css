@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Light mode: flip the neutral scale so every existing `*-neutral-*` utility
+   (backgrounds, text, borders) reads correctly on a light background without
+   touching component files. Accent colors (sky/violet/amber/red/emerald) are
+   left alone — they work in both modes. */
+html[data-theme="light"] {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  --color-neutral-950: oklch(100% 0 0);
+  --color-neutral-900: oklch(98% 0 0);
+  --color-neutral-800: oklch(92% 0 0);
+  --color-neutral-700: oklch(86% 0 0);
+  --color-neutral-600: oklch(74% 0 0);
+  --color-neutral-500: oklch(55% 0 0);
+  --color-neutral-400: oklch(42% 0 0);
+  --color-neutral-300: oklch(30% 0 0);
+  --color-neutral-200: oklch(22% 0 0);
+  --color-neutral-100: oklch(15% 0 0);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}

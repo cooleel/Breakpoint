@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.db
+*.db-journal
+.DS_Store
+node_modules/
+.next/
+dist/
+build/
+.uv-cache/
+.tensorlake/
+.claude/
+*.egg-info/
+.pytest_cache/
+
+# Private planning docs
+agent-inspector-plan.md
+agent-inspector-24h-plan.md
+PLAN.md
+NOTES.md

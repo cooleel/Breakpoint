@@ -1,0 +1,27 @@
+[project]
+name = "breakpoint"
+version = "0.1.0"
+description = "Find where your agent actually broke, not where it crashed."
+requires-python = ">=3.11"
+dependencies = [
+    "claude-agent-sdk>=0.1.63",
+    "e2b>=2.20.0",
+    "fastapi>=0.136.0",
+    "python-dotenv>=1.2.2",
+    "sqlmodel>=0.0.38",
+    "tensorlake>=0.4.45",
+    "uvicorn[standard]>=0.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.setuptools]
+packages = ["inspector", "api", "demo"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
