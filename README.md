@@ -10,7 +10,7 @@
 </p>
 
 <!-- 3-minute demo video — replace with the YouTube/Loom link once uploaded. -->
-**▶ [Watch the 3-minute demo]([https://youtu.be/REPLACE_ME](https://youtu.be/H2bTq-v0KzI?si=lcnKOlB-hlC94oZY))**
+**▶ [Watch the 3-minute demo](https://youtu.be/H2bTq-v0KzI?si=lcnKOlB-hlC94oZY)**
 
 A debugger for AI agents. Every tool call is checkpointed inside a
 Tensorlake sandbox; Opus 4.7 reads the full trajectory and tells you which
