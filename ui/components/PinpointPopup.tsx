@@ -21,6 +21,8 @@ export function PinpointPopup({
   turns,
   onJump,
   onFork,
+  forking,
+  forkError,
   onClose,
   demo,
 }: {
@@ -29,6 +31,8 @@ export function PinpointPopup({
   turns: Turn[];
   onJump: () => void;
   onFork: () => void;
+  forking?: boolean;
+  forkError?: string | null;
   onClose: () => void;
   demo?: { tooltip: string } | null;
 }) {
@@ -142,17 +146,22 @@ export function PinpointPopup({
           {culprit?.canFork && (
             <button
               onClick={onFork}
-              disabled={!!demo}
+              disabled={!!demo || !!forking}
               title={demo?.tooltip}
               className="text-[13px] px-5 py-2.5 rounded-md border border-violet-400 text-white bg-violet-600 hover:bg-violet-500 font-semibold normal-case tracking-normal whitespace-nowrap shadow-[0_8px_24px_rgba(124,58,237,0.35)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Fork from breakpoint with fix →
+              {forking ? "Forking…" : "Fork from breakpoint with fix →"}
             </button>
           )}
           <span className="ml-auto text-[10px] font-mono text-neutral-500 tracking-wider">
             esc to close
           </span>
         </div>
+        {forkError && (
+          <div className="mt-3 text-xs text-red-300 whitespace-pre-wrap">
+            fork failed: {forkError}
+          </div>
+        )}
       </div>
     </div>
   );

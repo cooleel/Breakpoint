@@ -2,8 +2,8 @@
 
 import { useRef } from "react";
 import { DiffSummaryEntry, RunStatus, Turn, VerdictStatus } from "@/lib/api";
-import { useScrollSelectedIntoView } from "@/lib/useScrollSelectedIntoView";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
+import { useTimelineAutoScroll } from "@/lib/useTimelineAutoScroll";
 import { PinpointPosition, TurnCard } from "./TurnCard";
 import { TimelineStatusPill } from "./TimelineStatusPill";
 
@@ -40,7 +40,13 @@ export function Timeline({
     onScrollLeftChange,
   );
 
-  useScrollSelectedIntoView(selectedRef, selectedTurnId, centerNonce);
+  useTimelineAutoScroll(
+    containerRef,
+    selectedRef,
+    turns,
+    selectedTurnId,
+    centerNonce ?? 0,
+  );
 
   if (turns.length === 0) {
     return (

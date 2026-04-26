@@ -2,8 +2,8 @@
 
 import { useRef } from "react";
 import { DiffSummaryEntry, ForkTimeline } from "@/lib/api";
-import { useScrollSelectedIntoView } from "@/lib/useScrollSelectedIntoView";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
+import { useTimelineAutoScroll } from "@/lib/useTimelineAutoScroll";
 import {
   CARD_GAP_PX,
   FORK_BUTTON_WIDTH_PX,
@@ -54,7 +54,14 @@ export function ForkTimelineRow({
     onScrollLeftChange,
   );
 
-  useScrollSelectedIntoView(selectedRef, selectedTurnId, centerNonce, isActive);
+  useTimelineAutoScroll(
+    containerRef,
+    selectedRef,
+    fork.turns,
+    selectedTurnId,
+    centerNonce ?? 0,
+    isActive,
+  );
 
   const arrowLeft = ROW_PADDING_X_PX + indentPx + ARROW_X_OFFSET - scrollLeft;
 

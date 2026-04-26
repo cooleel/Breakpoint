@@ -125,10 +125,8 @@ function Inspector() {
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<"file" | "exec">("file");
   const [forkTarget, setForkTarget] = useState<ToolCall | null>(null);
-  // When the user clicks "Fork from breakpoint with fix", we precompute the
-  // system prompt (parent prompt + Opus's suggested fix) and stash it here so
-  // ForkModal renders with it pre-filled. Reset on modal close.
-  const [forkSystemPromptOverride, setForkSystemPromptOverride] = useState<
+  const [forkingFromBreakpoint, setForkingFromBreakpoint] = useState(false);
+  const [forkFromBreakpointError, setForkFromBreakpointError] = useState<
     string | null
   >(null);
   const [findingBreakpointForRunId, setFindingBreakpointForRunId] = useState<
@@ -524,6 +522,11 @@ function Inspector() {
   const effectiveToolCallRef = useRef<ToolCall | null>(effectiveToolCall);
   effectiveToolCallRef.current = effectiveToolCall;
 
+  const closePinpointPopup = useCallback(() => {
+    setPinpointPopupOpen(false);
+    setForkFromBreakpointError(null);
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const r = runRef.current;
@@ -566,7 +569,7 @@ function Inspector() {
       if (e.key === "Escape") {
         if (pinpointPopupOpenRef.current) {
           e.preventDefault();
-          setPinpointPopupOpen(false);
+          closePinpointPopup();
         } else if (previewPathRef.current) {
           e.preventDefault();
           setPreviewPath(null);
@@ -578,7 +581,7 @@ function Inspector() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [updateQuery, demo]);
+  }, [updateQuery, demo, closePinpointPopup]);
 
   const onClearAll = useCallback(async () => {
     try {
@@ -723,27 +726,6 @@ function Inspector() {
     [updateQuery],
   );
 
-  const onForkFromBreakpoint = useCallback(
-    (jumpTurnId: string, jumpToolCallId: string) => {
-      if (!run || !activeAnalysis || !breakpointCulprit?.canFork) return;
-      const turns = activeFork ? activeFork.turns : run.turns;
-      const turn = turns.find((t) => t.id === jumpTurnId);
-      const culprit = turn?.tool_calls.find((c) => c.id === jumpToolCallId);
-      if (!culprit) return;
-      const fixed = `${run.system_prompt}\n\nIMPORTANT — corrective guidance from breakpoint analysis: ${activeAnalysis.suggested_fix}`;
-      setForkSystemPromptOverride(fixed);
-      setForkTarget(culprit);
-    },
-    [run, activeFork, activeAnalysis, breakpointCulprit],
-  );
-
-  const findBreakpointLabel =
-    findingBreakpointForRunId === activeRunId
-      ? "Opus is reading…"
-      : activeAnalysis
-        ? "Re-analyze"
-        : "Find the breakpoint";
-
   const onForked = useCallback(
     async (res: { run_id: string; parent_run_id: string }) => {
       setForkTarget(null);
@@ -763,6 +745,34 @@ function Inspector() {
     },
     [refreshRuns, loadRun, updateQuery],
   );
+
+  const onForkFromBreakpoint = useCallback(
+    async (culpritToolCallId: string) => {
+      if (!run || !activeAnalysis || !breakpointCulprit?.canFork) return;
+      const fixed = `${run.system_prompt}\n\nIMPORTANT — corrective guidance from breakpoint analysis: ${activeAnalysis.suggested_fix}`;
+      setForkingFromBreakpoint(true);
+      setForkFromBreakpointError(null);
+      try {
+        const res = await api.fork(culpritToolCallId, { system_prompt: fixed });
+        closePinpointPopup();
+        await onForked(res);
+      } catch (e) {
+        setForkFromBreakpointError(String(e));
+      } finally {
+        setForkingFromBreakpoint(false);
+      }
+    },
+    [run, activeAnalysis, breakpointCulprit, onForked, closePinpointPopup],
+  );
+
+  const isFindingBreakpoint = findingBreakpointForRunId === activeRunId;
+  const findBreakpointLabel = isFindingBreakpoint
+    ? activeAnalysis
+      ? "Opus 4.7 is re-analyzing…"
+      : "Opus 4.7 is looking…"
+    : activeAnalysis
+      ? "↻ Re-analyze"
+      : "↻ Find the breakpoint";
 
   return (
     <div className="flex flex-1 min-h-screen">
@@ -929,11 +939,7 @@ function Inspector() {
                 }
                 className="text-[13px] px-3.5 py-2.5 rounded border border-violet-400/60 text-violet-200 bg-violet-500/[0.18] hover:bg-violet-500/25 normal-case tracking-normal whitespace-nowrap font-medium disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {findingBreakpointForRunId === activeRunId
-                  ? "Re-analyzing…"
-                  : activeAnalysis
-                    ? "↻ Re-analyze"
-                    : "↻ Find the breakpoint"}
+                {findBreakpointLabel}
               </button>
             )}
             <button
@@ -985,17 +991,15 @@ function Inspector() {
                 breakpointCulprit.turnId,
                 breakpointCulprit.toolCallId,
               );
-              setPinpointPopupOpen(false);
+              closePinpointPopup();
             }}
             onFork={() => {
               if (!breakpointCulprit) return;
-              onForkFromBreakpoint(
-                breakpointCulprit.turnId,
-                breakpointCulprit.toolCallId,
-              );
-              setPinpointPopupOpen(false);
+              onForkFromBreakpoint(breakpointCulprit.toolCallId);
             }}
-            onClose={() => setPinpointPopupOpen(false)}
+            forking={forkingFromBreakpoint}
+            forkError={forkFromBreakpointError}
+            onClose={closePinpointPopup}
             demo={demo}
           />
         )}
@@ -1125,15 +1129,9 @@ function Inspector() {
       {forkTarget && run && (
         <ForkModal
           toolCall={forkTarget}
-          defaultSystemPrompt={forkSystemPromptOverride ?? run.system_prompt}
-          onClose={() => {
-            setForkTarget(null);
-            setForkSystemPromptOverride(null);
-          }}
-          onForked={(res) => {
-            setForkSystemPromptOverride(null);
-            onForked(res);
-          }}
+          defaultSystemPrompt={run.system_prompt}
+          onClose={() => setForkTarget(null)}
+          onForked={(res) => onForked(res)}
         />
       )}
     </div>
