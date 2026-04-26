@@ -215,6 +215,8 @@ def build_trajectory_text(run_id: str) -> tuple[str, str]:
         ).all()
         run_task = run.task_prompt
         run_status = run.status
+        verdict_status = run.final_verdict_status
+        verdict_text = run.final_verdict_text
 
     calls_by_turn: dict[Optional[str], list[ToolCall]] = {}
     for c in calls:
@@ -242,11 +244,21 @@ def build_trajectory_text(run_id: str) -> tuple[str, str]:
         }
         prev_files = cur_files
 
-    header = (
-        f"Run id: {run_id}\n"
-        f"Status: {run_status}\n"
-        f"Task prompt: {run_task}\n"
-    )
+    header_parts = [
+        f"Run id: {run_id}",
+        f"Status: {run_status}",
+        f"Task prompt: {run_task}",
+    ]
+    # External-verifier verdict trumps the agent's own self-report. If a probe
+    # found data loss, the agent's "all green" assistant text is misleading —
+    # surface the disagreement up front so the critic looks for the silent-
+    # corruption step, not just the first `is_error: TRUE` row.
+    if verdict_status:
+        line = f"External verifier verdict: {verdict_status.upper()}"
+        if verdict_text:
+            line += f" — {verdict_text}"
+        header_parts.append(line)
+    header = "\n".join(header_parts) + "\n"
 
     parts: list[str] = []
     if turns:

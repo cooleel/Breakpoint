@@ -10,7 +10,7 @@ Usage::
 
     from tensorlake_tools import start_session, end_session, bash, edit_file, view
 
-    sandbox = tl.create_and_connect()
+    sandbox = tl.create_and_connect(timeout_secs=300)
     start_session(task="fix the failing test", sandbox=sandbox, tl_client=tl)
     # register `bash`, `edit_file`, `view` with your agent framework
     end_session(status="done")

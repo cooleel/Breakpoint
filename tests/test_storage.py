@@ -57,6 +57,26 @@ def test_toolcall_defaults_and_fk(tmp_db):
         assert found.id == call.id
 
 
+def test_run_verdict_fields(tmp_db):
+    with get_session() as s:
+        r = Run(task_prompt="t")
+        s.add(r)
+        s.commit()
+        s.refresh(r)
+        assert r.final_verdict_status is None
+        assert r.final_verdict_text is None
+
+        r.final_verdict_status = "fail"
+        r.final_verdict_text = "row count = 5 (expected 7) — DATA LOSS"
+        s.add(r)
+        s.commit()
+
+        again = s.get(Run, r.id)
+        assert again is not None
+        assert again.final_verdict_status == "fail"
+        assert again.final_verdict_text == "row count = 5 (expected 7) — DATA LOSS"
+
+
 def test_tool_use_id_is_unique(tmp_db):
     import sqlalchemy.exc
 

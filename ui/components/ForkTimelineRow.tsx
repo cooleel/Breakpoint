@@ -10,6 +10,7 @@ import {
   ROW_PADDING_X_PX,
   TurnCard,
 } from "./TurnCard";
+import { TimelineStatusPill } from "./TimelineStatusPill";
 
 // Short yellow arrow in the row gap, pointing at the "↳" in the fork button.
 const ARROW_W = 14;
@@ -127,6 +128,9 @@ export function ForkTimelineRow({
               />
             );
           })}
+          {fork.turns.length > 0 && (
+            <TimelineStatusPill status={fork.status} />
+          )}
         </div>
       </div>
     </div>

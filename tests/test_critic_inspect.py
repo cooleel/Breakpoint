@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 import inspector.critic as critic
-from inspector.critic import find_breakpoint
+from inspector.critic import build_trajectory_text, find_breakpoint
 from inspector.storage import Run, ToolCall, Turn, get_session
 
 
@@ -286,3 +286,27 @@ def test_iteration_cap_raises(tmp_db, scripted, monkeypatch):
 
     with pytest.raises(RuntimeError, match="did not return a report_breakpoint"):
         find_breakpoint(run_id, sandbox_for_snapshot=lambda _sid: fake_sb)
+
+
+def test_trajectory_header_includes_external_verdict(tmp_db):
+    """A failed external verifier should land in the trajectory header so the
+    critic looks for the silent-corruption step, not just `is_error: TRUE`
+    rows."""
+    run_id, _, _ = _seed_failed_run()
+    with get_session() as s:
+        r = s.get(Run, run_id)
+        assert r is not None
+        r.final_verdict_status = "fail"
+        r.final_verdict_text = "todos.db row count = 5 (expected 7) — DATA LOSS"
+        s.add(r)
+        s.commit()
+
+    header, _body = build_trajectory_text(run_id)
+    assert "External verifier verdict: FAIL" in header
+    assert "DATA LOSS" in header
+
+
+def test_trajectory_header_omits_verdict_when_unset(tmp_db):
+    run_id, _, _ = _seed_failed_run()
+    header, _body = build_trajectory_text(run_id)
+    assert "External verifier verdict" not in header

@@ -8,14 +8,18 @@ export function shortToolName(name: string): string {
   return name.split("__").pop() ?? name;
 }
 
+export type RunStatus = "running" | "done" | "failed";
+export type VerdictStatus = "ok" | "fail";
+
 export type RunSummary = {
   id: string;
   created_at: string;
   task_prompt: string;
-  status: string;
+  status: RunStatus;
   parent_run_id: string | null;
   forked_from_tool_call_id: string | null;
   turn_count: number;
+  final_verdict_status: VerdictStatus | null;
 };
 
 export type ToolCall = {
@@ -58,7 +62,7 @@ export type ForkTimeline = {
   id: string;
   created_at: string;
   task_prompt: string;
-  status: string;
+  status: RunStatus;
   forked_from_tool_call_id: string;
   parent_run_id: string;
   parent_turn_index: number | null;
@@ -71,13 +75,15 @@ export type RunDetail = {
   created_at: string;
   task_prompt: string;
   system_prompt: string;
-  status: string;
+  status: RunStatus;
   parent_run_id: string | null;
   forked_from_tool_call_id: string | null;
   root_sandbox_id: string | null;
   turns: Turn[];
   forks: ForkTimeline[];
   critic_analysis: CriticAnalysis | null;
+  final_verdict_status: VerdictStatus | null;
+  final_verdict_text: string | null;
 };
 
 export type ForkResponse = {

@@ -846,7 +846,32 @@ function Inspector() {
                     </span>
                   </>
                 )}
+                {run?.final_verdict_status &&
+                  (() => {
+                    const ok = run.final_verdict_status === "ok";
+                    return (
+                      <>
+                        <span className="w-[3px] h-[3px] rounded-full bg-neutral-600" />
+                        <span
+                          className={`flex items-center gap-1.5 ${ok ? "text-emerald-400" : "text-red-400"}`}
+                          title={run.final_verdict_text ?? undefined}
+                        >
+                          <span
+                            className={`w-[5px] h-[5px] rounded-full ${ok ? "bg-emerald-400" : "bg-red-400 shadow-[0_0_8px_#f87171]"}`}
+                          />
+                          {ok ? "verified" : "data loss"}
+                        </span>
+                      </>
+                    );
+                  })()}
               </div>
+              {run?.final_verdict_status === "fail" &&
+                run.final_verdict_text && (
+                  <div className="mt-2 px-2.5 py-1.5 rounded border border-red-500/40 bg-red-500/[0.08] text-[11px] text-red-200 font-mono leading-snug">
+                    <strong className="font-semibold">verifier:</strong>{" "}
+                    {run.final_verdict_text}
+                  </div>
+                )}
             </div>
           </div>
 
@@ -984,6 +1009,8 @@ function Inspector() {
             <ErrorBoundary label="timeline" resetKey={run.id}>
               <Timeline
                 turns={run.turns}
+                status={run.status}
+                verdict={run.final_verdict_status}
                 selectedTurnId={activeSelectionInParent ? selectedTurnId : null}
                 onSelectTurn={onSelectParentTurn}
                 scrollLeft={timelineScrollLeft}

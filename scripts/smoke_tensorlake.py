@@ -106,7 +106,7 @@ def validate_process_continuity(tl, sandbox) -> None:
     print(f"  snapshot_id={snap.snapshot_id} elapsed_ms={snap.elapsed_ms}")
 
     print("  restoring into new sandbox...")
-    restored = tl.create_and_connect(snapshot_id=snap.snapshot_id)
+    restored = tl.create_and_connect(snapshot_id=snap.snapshot_id, timeout_secs=300)
     try:
         time.sleep(3.0)
         r2 = restored.run(

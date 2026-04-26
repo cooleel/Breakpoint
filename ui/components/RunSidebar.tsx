@@ -217,16 +217,28 @@ export function RunSidebar({
   );
 }
 
-function StatusDot({ status }: { status: string }) {
+function StatusDot({
+  status,
+  verdict,
+}: {
+  status: string;
+  verdict?: "ok" | "fail" | null;
+}) {
   const isRunning = status === "running";
+  // A "done" run that failed an external verifier is silently corrupt — the
+  // whole point of the verdict feature. Paint the sidebar dot red so the user
+  // sees it before clicking in.
+  const isSilentFail = status === "done" && verdict === "fail";
   const color =
-    status === "done"
-      ? "bg-emerald-400"
-      : status === "failed"
-        ? "bg-red-400"
-        : isRunning
-          ? "bg-amber-300"
-          : "bg-neutral-500";
+    isSilentFail
+      ? "bg-red-400"
+      : status === "done"
+        ? "bg-emerald-400"
+        : status === "failed"
+          ? "bg-red-400"
+          : isRunning
+            ? "bg-amber-300"
+            : "bg-neutral-500";
   return (
     <span className="relative inline-flex items-center justify-center w-2.5 h-2.5 shrink-0">
       {isRunning && (
@@ -281,7 +293,10 @@ function SidebarRow({
         )}
         <div className="flex items-start gap-2 mb-1">
           <span className="mt-1">
-            <StatusDot status={run.status} />
+            <StatusDot
+              status={run.status}
+              verdict={run.final_verdict_status}
+            />
           </span>
           <div
             className="flex-1 min-w-0 text-[13px] font-medium text-neutral-100 leading-snug overflow-hidden"

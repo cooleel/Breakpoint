@@ -24,7 +24,7 @@ import time
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import anyio
 from dotenv import load_dotenv
@@ -104,7 +104,7 @@ class _SandboxCache:
             sb = self._restored.get(snapshot_id)
             if sb is not None:
                 return sb
-            sb = Sandbox.create(snapshot_id=snapshot_id)
+            sb = Sandbox.create(snapshot_id=snapshot_id, timeout_secs=300)
             self._restored[snapshot_id] = sb
             return sb
 
@@ -171,6 +171,7 @@ class RunSummary(BaseModel):
     parent_run_id: Optional[str]
     forked_from_tool_call_id: Optional[str]
     turn_count: int
+    final_verdict_status: Optional[str] = None  # "ok" | "fail" when set
 
 
 class ToolCallOut(BaseModel):
@@ -237,6 +238,17 @@ class RunDetail(BaseModel):
     turns: list[TurnOut]
     forks: list[ForkTimeline] = []
     critic_analysis: Optional[CriticAnalysisOut] = None
+    final_verdict_status: Optional[str] = None  # "ok" | "fail" when set
+    final_verdict_text: Optional[str] = None
+
+
+class VerdictRequest(BaseModel):
+    # Inbound is strictly validated — Pydantic rejects anything else at the
+    # endpoint boundary. The response models keep `str` because legacy DB rows
+    # could in principle hold an out-of-range value, and we'd rather render
+    # them than 500.
+    status: Literal["ok", "fail"]
+    text: str
 
 
 class FileResponse(BaseModel):
@@ -415,6 +427,7 @@ def list_runs() -> list[RunSummary]:
                 parent_run_id=r.parent_run_id,
                 forked_from_tool_call_id=r.forked_from_tool_call_id,
                 turn_count=counts.get(r.id, 0),
+                final_verdict_status=r.final_verdict_status,
             )
             for r in runs
         ]
@@ -510,6 +523,8 @@ def get_run(run_id: str) -> RunDetail:
             turns=turn_outs,
             forks=fork_timelines,
             critic_analysis=_critic_out(run.critic_analysis_json),
+            final_verdict_status=run.final_verdict_status,
+            final_verdict_text=run.final_verdict_text,
         )
 
 
@@ -842,6 +857,7 @@ async def fork(
         parent_system_prompt = parent.system_prompt
         parent_task_prompt = parent.task_prompt
         parent_id = parent.id
+        parent_probe_spec = parent.probe_spec_json
 
     system_prompt = (
         body.system_prompt if body.system_prompt is not None else parent_system_prompt
@@ -855,6 +871,7 @@ async def fork(
             status="running",
             parent_run_id=parent_id,
             forked_from_tool_call_id=tc.id,
+            probe_spec_json=parent_probe_spec,
         )
         s.add(new_run)
         s.commit()
@@ -877,6 +894,27 @@ async def fork(
     )
 
 
+def _run_probe(sandbox: Any, spec: dict) -> tuple[Literal["ok", "fail"], str]:
+    """Run a probe spec inside a sandbox; "ok" iff exit 0 and `expected_stdout`
+    is a substring of stdout. Spec shape: {"argv", "working_dir", "expected_stdout"}."""
+    argv = spec.get("argv") or []
+    if not argv:
+        return "fail", "probe spec has empty argv"
+    working_dir = spec.get("working_dir") or "/"
+    expected = spec.get("expected_stdout") or ""
+    try:
+        result = sandbox.run(argv[0], argv[1:], working_dir=working_dir, timeout=30.0)
+    except Exception as e:
+        return "fail", f"probe raised: {type(e).__name__}: {e}"
+    stdout = (getattr(result, "stdout", "") or "").strip()
+    exit_code = getattr(result, "exit_code", None)
+    if exit_code not in (None, 0):
+        return "fail", f"probe exit={exit_code} stdout={stdout!r}"
+    if expected and expected not in stdout:
+        return "fail", f"probe stdout={stdout!r} did not match expected {expected!r}"
+    return "ok", f"probe stdout={stdout!r}"
+
+
 async def _execute_fork(
     *,
     new_run_id: str,
@@ -893,7 +931,7 @@ async def _execute_fork(
         )
         # Dedicated restore — not put in SANDBOX_CACHE so the agent's
         # mutations don't race cached readers using the same snapshot.
-        sandbox = Sandbox.create(snapshot_id=snapshot_id)
+        sandbox = Sandbox.create(snapshot_id=snapshot_id, timeout_secs=300)
         with get_session() as s:
             r = s.get(Run, new_run_id)
             if r is not None:
@@ -902,10 +940,13 @@ async def _execute_fork(
                 s.commit()
                 s.refresh(r)
                 run_obj = r
+                # Read the probe spec inside the session — `run_obj` is detached
+                # after exit and SQLModel raises on expired-attribute access.
+                probe_spec_raw = r.probe_spec_json
             else:
                 return
 
-        inspector = Inspector(tensorlake_client=tl, db_path=DB_PATH)
+        inspector = Inspector(tensorlake_client=SANDBOX_CACHE.tl_client(), db_path=DB_PATH)
         await inspector.run_agent(
             run_obj,
             sandbox,
@@ -913,6 +954,23 @@ async def _execute_fork(
             system_prompt=system_prompt,
             max_turns=FORK_MAX_TURNS,
         )
+        # Probe the fork's sandbox so the verdict reflects observed state, not
+        # the agent's self-report — that's the whole exit signal for the fork loop.
+        if probe_spec_raw:
+            try:
+                spec = json.loads(probe_spec_raw)
+            except json.JSONDecodeError as e:
+                status, text = "fail", f"probe spec malformed: {e}"
+            else:
+                status, text = _run_probe(sandbox, spec)
+            print(f"[fork] run {new_run_id} probe verdict={status} {text}", file=sys.stderr)
+            with get_session() as s:
+                r = s.get(Run, new_run_id)
+                if r is not None:
+                    r.final_verdict_status = status
+                    r.final_verdict_text = text
+                    s.add(r)
+                    s.commit()
     except Exception as e:
         print(
             f"[fork] run {new_run_id} failed (snapshot_id={snapshot_id}): {e}",
@@ -967,6 +1025,23 @@ async def post_find_breakpoint(run_id: str) -> CriticAnalysisOut:
         s.commit()
 
     return CriticAnalysisOut(**analysis)
+
+
+@app.post("/runs/{run_id}/verdict")
+def post_verdict(run_id: str, body: VerdictRequest) -> dict:
+    """Record an external verifier's pass/fail on a finished run. The agent
+    never sees this on its own turn — it lands on the Run row so the UI can
+    flag silent corruption (a run that ended status=done but failed an
+    external probe) and the critic can fold the verdict into its trajectory."""
+    with get_session() as s:
+        run = s.get(Run, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        run.final_verdict_status = body.status
+        run.final_verdict_text = body.text
+        s.add(run)
+        s.commit()
+    return {"ok": True}
 
 
 @app.delete("/runs")

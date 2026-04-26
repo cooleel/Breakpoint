@@ -26,6 +26,20 @@ class Run(SQLModel, table=True):
     parent_run_id: Optional[str] = Field(default=None, foreign_key="run.id")
     forked_from_tool_call_id: Optional[str] = Field(default=None, foreign_key="toolcall.id")
     critic_analysis_json: Optional[str] = None
+    # Set by an external verifier (e.g. demo/task.py) after the run completes.
+    # The agent never sees these on its own turn — they're surfaced in the UI
+    # and folded into the critic's trajectory header so Opus knows about
+    # silent-corruption failures the agent declared "done".
+    # Status is "ok" | "fail" — typed as str at the SQLModel boundary because
+    # SQLModel doesn't infer a column type from a Literal alias. The API layer
+    # validates the values via Pydantic Literal.
+    final_verdict_status: Optional[str] = None
+    final_verdict_text: Optional[str] = None
+    # Probe spec (JSON) the API runs against the sandbox after a fork's agent
+    # finishes, to write a verdict without the agent's self-report. Forks
+    # inherit this from their parent run via the fork endpoint. Shape:
+    # {"argv": [...], "working_dir": "...", "expected_stdout": "..."}.
+    probe_spec_json: Optional[str] = None
 
 
 class Turn(SQLModel, table=True):
@@ -71,6 +85,12 @@ def init_db(db_path: str):
         cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(run)")}
         if "critic_analysis_json" not in cols:
             conn.exec_driver_sql("ALTER TABLE run ADD COLUMN critic_analysis_json TEXT")
+        if "final_verdict_status" not in cols:
+            conn.exec_driver_sql("ALTER TABLE run ADD COLUMN final_verdict_status TEXT")
+        if "final_verdict_text" not in cols:
+            conn.exec_driver_sql("ALTER TABLE run ADD COLUMN final_verdict_text TEXT")
+        if "probe_spec_json" not in cols:
+            conn.exec_driver_sql("ALTER TABLE run ADD COLUMN probe_spec_json TEXT")
     return _engine
 
 

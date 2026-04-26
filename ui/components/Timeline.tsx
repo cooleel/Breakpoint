@@ -1,15 +1,18 @@
 "use client";
 
 import { useRef } from "react";
-import { DiffSummaryEntry, Turn } from "@/lib/api";
+import { DiffSummaryEntry, RunStatus, Turn, VerdictStatus } from "@/lib/api";
 import { useScrollSelectedIntoView } from "@/lib/useScrollSelectedIntoView";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import { PinpointPosition, TurnCard } from "./TurnCard";
+import { TimelineStatusPill } from "./TimelineStatusPill";
 
 const TICK_EVERY = 5;
 
 export function Timeline({
   turns,
+  status,
+  verdict,
   selectedTurnId,
   onSelectTurn,
   scrollLeft,
@@ -20,6 +23,8 @@ export function Timeline({
   centerNonce,
 }: {
   turns: Turn[];
+  status: RunStatus;
+  verdict?: VerdictStatus | null;
   selectedTurnId: string | null;
   onSelectTurn: (turnId: string) => void;
   scrollLeft: number;
@@ -39,8 +44,9 @@ export function Timeline({
 
   if (turns.length === 0) {
     return (
-      <div className="h-32 flex items-center justify-center text-xs text-neutral-500">
-        no turns yet
+      <div className="h-32 flex items-center justify-center gap-3 text-xs text-neutral-500">
+        <span>no turns yet</span>
+        <TimelineStatusPill status={status} verdict={verdict} />
       </div>
     );
   }
@@ -94,6 +100,9 @@ export function Timeline({
             </li>
           );
         })}
+        <li className="contents">
+          <TimelineStatusPill status={status} verdict={verdict} />
+        </li>
       </ol>
       {hasWasted && (
         <div className="absolute bottom-1.5 right-7 text-[10px] text-amber-300/70 uppercase tracking-wider pointer-events-none">

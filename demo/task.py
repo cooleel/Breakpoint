@@ -50,6 +50,7 @@ from demo.seeds import APP_DIR, SCHEMA_ROW_COUNT, USER_ROWS, files  # noqa: E402
 from inspector import Inspector  # noqa: E402
 from inspector.sandbox_lifecycle import terminate_sandbox  # noqa: E402
 from inspector.snapshot import take_snapshot  # noqa: E402
+from inspector.storage import Run, get_session  # noqa: E402
 
 
 TASK_PROMPT = (
@@ -202,20 +203,27 @@ def seed_sandbox(sandbox) -> None:
     _bash(sandbox, combined, working_dir=APP_DIR)
 
 
-def _probe_todo_count(sandbox) -> int:
-    """Return ``SELECT COUNT(*) FROM todos``, or 0 on any failure (missing
-    db, shell error, parse error). A wiped db reads as 0, which is the exact
-    signal the demo is checking for."""
-    result = sandbox.run(
-        "bash",
-        [
+def _todo_count_probe_spec(expected_count: int | None = None) -> dict:
+    """Single source of truth for the todos.db row-count probe — used both by
+    the local in-process check and stamped onto the Run row so the API can
+    re-run it against any fork's sandbox."""
+    return {
+        "argv": [
+            "bash",
             "-c",
             "python3 -c \"import sqlite3; "
             "print(sqlite3.connect('todos.db').execute('SELECT COUNT(*) FROM todos').fetchone()[0])\"",
         ],
-        working_dir=APP_DIR,
-        timeout=30.0,
-    )
+        "working_dir": APP_DIR,
+        "expected_stdout": str(expected_count) if expected_count is not None else "",
+    }
+
+
+def _probe_todo_count(sandbox) -> int:
+    """Return ``SELECT COUNT(*) FROM todos``, or 0 on any failure (a wiped
+    db reads as 0, which is the exact signal the demo is checking for)."""
+    spec = _todo_count_probe_spec()
+    result = sandbox.run(spec["argv"][0], spec["argv"][1:], working_dir=spec["working_dir"], timeout=30.0)
     try:
         return int((result.stdout or "").strip())
     except ValueError:
@@ -300,6 +308,15 @@ async def main_async(args: argparse.Namespace) -> None:
             system_prompt=SYSTEM_PROMPT,
             root_sandbox_id=sandbox.sandbox_id,
         )
+        # Stash the probe spec so forks inherit it and the API can re-run it
+        # against the fork's sandbox without knowing demo-specific shape.
+        probe_spec = _todo_count_probe_spec(SCHEMA_ROW_COUNT + len(USER_ROWS))
+        with get_session() as s:
+            r = s.get(Run, run.id)
+            if r is not None:
+                r.probe_spec_json = json.dumps(probe_spec)
+                s.add(r)
+                s.commit()
         print(f"[run] run_id={run.id}  db={args.db}  model={args.model}")
 
         thinking = {"type": "adaptive", "display": "summarized"} if args.thinking else None
@@ -321,10 +338,21 @@ async def main_async(args: argparse.Namespace) -> None:
 
         final_count = _probe_todo_count(sandbox)
         expected = SCHEMA_ROW_COUNT + len(USER_ROWS)
-        verdict = "ok" if final_count == expected else "DATA LOSS"
-        print(
-            f"[result] todos.db row count = {final_count} (expected {expected}) — {verdict}"
+        passed = final_count == expected
+        verdict_text = (
+            f"todos.db row count = {final_count} (expected {expected}) — "
+            f"{'ok' if passed else 'DATA LOSS'}"
         )
+        print(f"[result] {verdict_text}")
+        # Demo writes directly: it's already in-process against the same DB
+        # the API serves, and the API endpoint exists for external callers.
+        with get_session() as s:
+            r = s.get(Run, run.id)
+            if r is not None:
+                r.final_verdict_status = "ok" if passed else "fail"
+                r.final_verdict_text = verdict_text
+                s.add(r)
+                s.commit()
     finally:
         terminate_sandbox(tl, sandbox, label="teardown")
 
