@@ -21,7 +21,7 @@ import { ExecPanel } from "@/components/ExecPanel";
 import { ForkModal } from "@/components/ForkModal";
 import { ForkTimelineRow } from "@/components/ForkTimelineRow";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { BreakpointCard, BreakpointCulprit } from "@/components/BreakpointCard";
+import { PinpointPopup, BreakpointCulprit } from "@/components/PinpointPopup";
 import {
   CARD_GAP_PX,
   CARD_WIDTH_PX,
@@ -137,12 +137,7 @@ function Inspector() {
   const [findBreakpointError, setFindBreakpointError] = useState<string | null>(
     null,
   );
-  // Per-row dismissal of the breakpoint card (in-memory only). Cleared
-  // implicitly when /runs/{id} is refetched and a new analysis arrives, since
-  // the new card is keyed off the analysis identity.
-  const [dismissedAnalysis, setDismissedAnalysis] = useState<Set<string>>(
-    new Set(),
-  );
+  const [pinpointPopupOpen, setPinpointPopupOpen] = useState(false);
   // While true, selection auto-advances to the newest turn of the active row
   // as polling brings in new data. Turned off the moment the user manually
   // picks a turn/tool (or arrow-key navigates) so we don't yank them away
@@ -200,6 +195,8 @@ function Inspector() {
   previewPathRef.current = previewPath;
   const forkTargetRef = useRef<ToolCall | null>(forkTarget);
   forkTargetRef.current = forkTarget;
+  const pinpointPopupOpenRef = useRef(pinpointPopupOpen);
+  pinpointPopupOpenRef.current = pinpointPopupOpen;
   // Cached fetch bodies keyed by collection — poll ticks overwrite state only
   // when the payload actually changes, avoiding downstream re-renders.
   const lastRunJsonRef = useRef<string | null>(null);
@@ -567,7 +564,10 @@ function Inspector() {
       }
 
       if (e.key === "Escape") {
-        if (previewPathRef.current) {
+        if (pinpointPopupOpenRef.current) {
+          e.preventDefault();
+          setPinpointPopupOpen(false);
+        } else if (previewPathRef.current) {
           e.preventDefault();
           setPreviewPath(null);
         } else if (toolCallIdRef.current) {
@@ -696,15 +696,6 @@ function Inspector() {
     return null;
   }, [activeAnalysis, activeFork, run]);
 
-  // Keyed by `<runId>:<root_cause>` so a regenerate (new wording) shows again
-  // after a previous dismissal.
-  const analysisKey =
-    activeRunId && activeAnalysis
-      ? `${activeRunId}:${activeAnalysis.root_cause}`
-      : null;
-  const showBreakpointCard =
-    !!activeAnalysis && !!analysisKey && !dismissedAnalysis.has(analysisKey);
-
   const onFindBreakpoint = useCallback(async () => {
     if (!activeRunId) return;
     setFindingBreakpointForRunId(activeRunId);
@@ -746,15 +737,6 @@ function Inspector() {
     [run, activeFork, activeAnalysis, breakpointCulprit],
   );
 
-  const onDismissBreakpoint = useCallback(() => {
-    if (!analysisKey) return;
-    setDismissedAnalysis((prev) => {
-      const next = new Set(prev);
-      next.add(analysisKey);
-      return next;
-    });
-  }, [analysisKey]);
-
   const findBreakpointLabel =
     findingBreakpointForRunId === activeRunId
       ? "Opus is reading…"
@@ -794,60 +776,167 @@ function Inspector() {
         demo={demo}
       />
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="px-6 py-3 border-b border-neutral-800 flex items-baseline justify-between">
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-sm font-semibold">Agent Inspector</h2>
-            {demo && (
+        <header
+          className="border-b border-neutral-800 flex items-stretch min-h-[132px]"
+          style={{
+            background:
+              "linear-gradient(180deg, var(--background) 0%, rgba(0,0,0,0.25) 100%)",
+          }}
+        >
+          <div className="flex-1 min-w-0 px-7 pt-5 pb-4 flex flex-col gap-3 border-r border-neutral-800">
+            <div className="flex items-center gap-3">
               <span
-                title={demo.tooltip}
-                className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-amber-400/70 text-amber-200 bg-amber-500/15"
-              >
-                demo mode
+                aria-hidden
+                className="w-1 h-7 bg-sky-400 rounded-[1px] shrink-0"
+              />
+              <h2 className="text-2xl font-semibold m-0 tracking-tight leading-none">
+                <span className="text-sky-400">Break</span>point
+              </h2>
+              {demo && (
+                <span
+                  title={demo.tooltip}
+                  className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-amber-400/70 text-amber-200 bg-amber-500/15"
+                >
+                  demo mode
+                </span>
+              )}
+              <span className="text-[9px] font-mono text-neutral-500 uppercase tracking-[0.10em] ml-auto">
+                agent run inspector
               </span>
-            )}
-          </div>
-          <div className="text-[10px] uppercase tracking-wide text-neutral-500 flex gap-3 items-center">
-            {run && <span>{run.id.slice(0, 8)}</span>}
-            {run && <span>· {run.turns.length} turns</span>}
-            {run && run.forks.length > 0 && (
-              <span>· {run.forks.length} fork{run.forks.length === 1 ? "" : "s"}</span>
-            )}
-            {activeFirstFailure && (
-              <button
-                type="button"
-                onClick={onJumpToFirstFailure}
-                className="ml-2 px-2 py-0.5 rounded border border-red-500/70 text-red-300 bg-red-500/10 hover:bg-red-500/20 normal-case tracking-normal"
-                title="Open the first failed tool call in this row"
+            </div>
+            <div className="flex flex-col gap-1 min-w-0">
+              <div className="text-[9px] uppercase tracking-[0.12em] text-neutral-500 font-medium">
+                task
+              </div>
+              <div
+                className="text-sm font-medium text-neutral-100 leading-snug overflow-hidden"
+                style={{
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                }}
               >
-                Jump to first failure
-              </button>
-            )}
+                {run?.task_prompt || "(no task prompt)"}
+              </div>
+              <div className="mt-1 flex items-center gap-3 text-[10px] uppercase tracking-[0.10em] text-neutral-500 flex-wrap">
+                {run && (
+                  <span className="font-mono text-neutral-400">
+                    {run.id.slice(4, 11)}
+                  </span>
+                )}
+                {run && (
+                  <span className="w-[3px] h-[3px] rounded-full bg-neutral-600" />
+                )}
+                {run && <span>{run.turns.length} turns</span>}
+                {run && run.forks.length > 0 && (
+                  <>
+                    <span className="w-[3px] h-[3px] rounded-full bg-neutral-600" />
+                    <span>
+                      {run.forks.length} fork
+                      {run.forks.length === 1 ? "" : "s"}
+                    </span>
+                  </>
+                )}
+                {activeAnalysis && (
+                  <>
+                    <span className="w-[3px] h-[3px] rounded-full bg-neutral-600" />
+                    <span className="text-violet-400 flex items-center gap-1.5">
+                      <span className="w-[5px] h-[5px] rounded-full bg-violet-400" />
+                      analyzed
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {activeAnalysis && (
+            <button
+              type="button"
+              onClick={() => setPinpointPopupOpen(true)}
+              className="w-[320px] shrink-0 px-5 py-4 border-r border-neutral-800 cursor-pointer text-left flex flex-col gap-2 text-neutral-100 relative bg-violet-500/[0.10] hover:bg-violet-500/[0.18] transition-colors"
+            >
+              <div className="text-[9px] uppercase tracking-[0.14em] text-violet-300 font-semibold flex items-center gap-2">
+                <span className="w-[5px] h-[5px] rounded-full bg-violet-400 shadow-[0_0_8px_#a78bfa]" />
+                breakpoint
+              </div>
+              <div className="text-[22px] font-semibold tracking-tight leading-none text-neutral-50">
+                {breakpointCulprit ? (
+                  <>
+                    pinpointed at{" "}
+                    <span className="text-amber-300 font-mono">
+                      turn {breakpointCulprit.turnIndex}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-neutral-300 text-lg">
+                    no single culprit
+                  </span>
+                )}
+              </div>
+              <div
+                className="text-[11px] text-neutral-400 overflow-hidden leading-snug"
+                style={{
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                }}
+              >
+                {activeAnalysis.root_cause ||
+                  "click to see root cause and suggested fix"}
+              </div>
+              <div className="mt-auto flex items-center gap-1.5 text-[10px] text-violet-300 uppercase tracking-[0.10em] font-medium">
+                view analysis →
+              </div>
+            </button>
+          )}
+
+          <div className="w-[220px] shrink-0 px-5 py-4 flex flex-col gap-2">
             {activeFirstFailure && (
               <button
                 type="button"
                 onClick={onFindBreakpoint}
                 disabled={findingBreakpointForRunId === activeRunId || !!demo}
-                className="px-2 py-0.5 rounded border border-violet-400/70 text-violet-100 bg-violet-500/15 hover:bg-violet-500/25 normal-case tracking-normal disabled:opacity-60 disabled:cursor-not-allowed"
                 title={
                   demo
                     ? demo.tooltip
                     : "Have Opus 4.7 read the trajectory and identify the root cause"
                 }
+                className="text-[13px] px-3.5 py-2.5 rounded border border-violet-400/60 text-violet-200 bg-violet-500/[0.18] hover:bg-violet-500/25 normal-case tracking-normal whitespace-nowrap font-medium disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {findBreakpointLabel}
+                {findingBreakpointForRunId === activeRunId
+                  ? "Re-analyzing…"
+                  : activeAnalysis
+                    ? "↻ Re-analyze"
+                    : "↻ Find the breakpoint"}
               </button>
             )}
-            <span>· ← / → scrub · F fork · Esc close</span>
             <button
               type="button"
-              onClick={toggleTheme}
-              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-              className="ml-2 px-2 py-0.5 rounded border border-neutral-700 text-neutral-400 hover:bg-neutral-900"
-              suppressHydrationWarning
+              onClick={onJumpToFirstFailure}
+              disabled={!activeFirstFailure}
+              title="Open the first failed tool call in this row"
+              className="text-[13px] px-3.5 py-2.5 rounded border border-neutral-700 text-neutral-300 bg-transparent hover:bg-neutral-900 normal-case tracking-normal whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {theme === "dark" ? "☾ dark" : "☀ light"}
+              Jump to first failure
             </button>
+            <div className="mt-auto flex items-center justify-between text-[9px] uppercase tracking-[0.10em] text-neutral-600">
+              <span className="flex items-center gap-1">
+                <span className="font-mono">← →</span> scrub
+                <span className="w-px h-2 bg-neutral-800 mx-0.5" />
+                <span className="font-mono">F</span> fork
+              </span>
+              <button
+                type="button"
+                onClick={toggleTheme}
+                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+                className="px-1.5 py-0.5 rounded border border-neutral-800 text-neutral-400 bg-transparent hover:bg-neutral-900 text-[10px]"
+                suppressHydrationWarning
+              >
+                {theme === "dark" ? "☾" : "☀"}
+              </button>
+            </div>
           </div>
         </header>
         {runError && (
@@ -860,13 +949,28 @@ function Inspector() {
             breakpoint analysis failed: {findBreakpointError}
           </div>
         )}
-        {run && showBreakpointCard && activeAnalysis && (
-          <BreakpointCard
+        {run && pinpointPopupOpen && activeAnalysis && (
+          <PinpointPopup
             analysis={activeAnalysis}
             culprit={breakpointCulprit}
-            onJump={onJumpToBreakpoint}
-            onFork={onForkFromBreakpoint}
-            onDismiss={onDismissBreakpoint}
+            turns={activeFork ? activeFork.turns : run.turns}
+            onJump={() => {
+              if (!breakpointCulprit) return;
+              onJumpToBreakpoint(
+                breakpointCulprit.turnId,
+                breakpointCulprit.toolCallId,
+              );
+              setPinpointPopupOpen(false);
+            }}
+            onFork={() => {
+              if (!breakpointCulprit) return;
+              onForkFromBreakpoint(
+                breakpointCulprit.turnId,
+                breakpointCulprit.toolCallId,
+              );
+              setPinpointPopupOpen(false);
+            }}
+            onClose={() => setPinpointPopupOpen(false)}
             demo={demo}
           />
         )}
@@ -887,6 +991,11 @@ function Inspector() {
                 diffSummary={diffByToolCallId}
                 firstFailureTurnId={
                   firstFailureByRunId.get(run.id)?.turnId ?? null
+                }
+                pinpointTurnId={
+                  !activeFork && breakpointCulprit
+                    ? breakpointCulprit.turnId
+                    : null
                 }
                 centerNonce={centerNonce}
               />

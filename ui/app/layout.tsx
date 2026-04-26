@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Agent Inspector",
+  title: "Breakpoint",
   description: "Scrub and fork Claude Agent SDK runs",
 };
 

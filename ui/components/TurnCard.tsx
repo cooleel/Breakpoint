@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef } from "react";
-import { DiffSummaryEntry, shortToolName, Turn } from "@/lib/api";
+import { DiffSummaryEntry, shortToolName, ToolCall, Turn } from "@/lib/api";
 
 // Keep in lock-step — ForkTimelineRow indents by these values so child cards
 // align under their parent anchor turn.
@@ -13,32 +13,111 @@ export const ROW_PADDING_X_PX = 16; // px-4
 // without measuring the DOM.
 export const FORK_BUTTON_WIDTH_PX = 132;
 
-// Failure in any tool call overrides dominant-tool coloring.
-export function turnAccent(turn: Turn): string {
-  if (turn.tool_calls.some((c) => c.is_error || c.snapshot_failed)) {
-    return "bg-red-500/20 border-red-500/60";
-  }
-  const names = new Set(
-    turn.tool_calls.map((c) => shortToolName(c.tool_name).toLowerCase()),
-  );
-  if (names.size === 0) return "bg-neutral-800/60 border-neutral-700";
-  if (names.size > 1) return "bg-violet-500/15 border-violet-400/60";
-  const only = names.values().next().value ?? "";
-  if (only.includes("write") || only.includes("edit"))
-    return "bg-amber-500/15 border-amber-400/60";
-  if (only.includes("read")) return "bg-sky-500/15 border-sky-400/60";
-  if (only.includes("bash")) return "bg-emerald-500/15 border-emerald-400/60";
-  return "bg-neutral-700/40 border-neutral-600";
+type TurnStatus = "pinpoint" | "error" | "edit" | "run" | "read" | "think";
+
+function turnStatus(turn: Turn): TurnStatus {
+  const tools = turn.tool_calls;
+  if (tools.some((c) => c.is_error || c.snapshot_failed)) return "error";
+  if (tools.some((c) => /write|edit/i.test(c.tool_name))) return "edit";
+  if (tools.some((c) => /bash|run|exec/i.test(c.tool_name))) return "run";
+  if (tools.some((c) => /read/i.test(c.tool_name))) return "read";
+  return "think";
 }
 
-type Props = {
-  turn: Turn;
-  selected: boolean;
-  ringColor: "sky" | "violet";
-  diffSummary?: Map<string, DiffSummaryEntry>;
-  firstFailure?: boolean;
-  onClick: () => void;
+const SPINE_COLOR: Record<TurnStatus, string> = {
+  pinpoint: "#fbbf24",
+  error: "#f87171",
+  edit: "#a78bfa",
+  run: "#38bdf8",
+  read: "#64748b",
+  think: "#404040",
 };
+
+function pickPath(call: ToolCall): string | null {
+  const i = call.tool_input as { path?: string; file_path?: string } | null;
+  return (i?.path ?? i?.file_path) || null;
+}
+
+function pickCmd(call: ToolCall): string | null {
+  const i = call.tool_input as { cmd?: string; command?: string } | null;
+  const raw = i?.cmd ?? i?.command;
+  if (!raw || typeof raw !== "string") return null;
+  return raw.split(" ")[0] || null;
+}
+
+// Summarize the dominant action of a turn — "edited test_todos.py", "ran pytest",
+// "read app.py". Falls back to a tool count when no input shape matches.
+function summarizeTurn(turn: Turn): {
+  icon: string;
+  text: string;
+  mono: boolean;
+} {
+  const tools = turn.tool_calls;
+  if (tools.length === 0) return { icon: "·", text: "thought", mono: false };
+
+  const writes = tools.filter((c) => /write|edit/i.test(c.tool_name));
+  const reads = tools.filter((c) => /read/i.test(c.tool_name));
+  const runs = tools.filter((c) => /bash|run|exec/i.test(c.tool_name));
+
+  if (writes.length > 0) {
+    const path = pickPath(writes[0]);
+    if (path) {
+      const fname = path.split("/").pop() ?? path;
+      return {
+        icon: "✎",
+        text:
+          writes.length > 1
+            ? `edited ${fname} +${writes.length - 1}`
+            : `edited ${fname}`,
+        mono: true,
+      };
+    }
+    return {
+      icon: "✎",
+      text: `edited ${writes.length} file${writes.length > 1 ? "s" : ""}`,
+      mono: false,
+    };
+  }
+  if (runs.length > 0) {
+    const cmd = pickCmd(runs[0]);
+    if (cmd) {
+      return {
+        icon: "▸",
+        text:
+          runs.length > 1 ? `ran ${cmd} +${runs.length - 1}` : `ran ${cmd}`,
+        mono: true,
+      };
+    }
+    return {
+      icon: "▸",
+      text: `ran ${runs.length} cmd${runs.length > 1 ? "s" : ""}`,
+      mono: false,
+    };
+  }
+  if (reads.length > 0) {
+    const path = pickPath(reads[0]);
+    if (path && reads.length === 1) {
+      const fname = path.split("/").pop() ?? path;
+      return { icon: "◧", text: `read ${fname}`, mono: true };
+    }
+    return {
+      icon: "◧",
+      text: `read ${reads.length} file${reads.length > 1 ? "s" : ""}`,
+      mono: false,
+    };
+  }
+  return {
+    icon: "·",
+    text: `${tools.length} tool${tools.length > 1 ? "s" : ""}`,
+    mono: false,
+  };
+}
+
+function formatDuration(ms: number | null | undefined): string {
+  if (!ms || ms < 1) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
 
 function aggregateTurnDiff(
   turn: Turn,
@@ -59,87 +138,173 @@ function aggregateTurnDiff(
   return { added, removed, modified };
 }
 
-function diffBadgeClasses(d: { added: number; removed: number; modified: number }): string {
+function diffBadgeClasses(d: {
+  added: number;
+  removed: number;
+  modified: number;
+}): string {
   if (d.removed > 0) return "border-red-400/70 text-red-300 bg-red-500/10";
   if (d.modified > 0 && d.added === 0)
     return "border-amber-400/70 text-amber-300 bg-amber-500/10";
   return "border-emerald-400/70 text-emerald-300 bg-emerald-500/10";
 }
 
+// Visual position of a turn relative to the breakpoint. "pin" = the
+// pinpointed turn itself; "past" = before it; "wasted" = after it (off-track);
+// undefined = no breakpoint analysis.
+export type PinpointPosition = "pin" | "past" | "wasted";
+
+type Props = {
+  turn: Turn;
+  selected: boolean;
+  ringColor: "sky" | "violet";
+  diffSummary?: Map<string, DiffSummaryEntry>;
+  firstFailure?: boolean;
+  pinpointPosition?: PinpointPosition;
+  onClick: () => void;
+};
+
 export const TurnCard = forwardRef<HTMLButtonElement, Props>(function TurnCard(
-  { turn, selected, ringColor, diffSummary, firstFailure, onClick },
+  {
+    turn,
+    selected,
+    ringColor,
+    diffSummary,
+    firstFailure,
+    pinpointPosition,
+    onClick,
+  },
   ref,
 ) {
   const tools = turn.tool_calls;
+  const hasError = tools.some((c) => c.is_error || c.snapshot_failed);
   const firstText = (turn.assistant_text || turn.reasoning_text)
     .trim()
     .split("\n")[0];
-  const ring =
-    ringColor === "violet"
-      ? "ring-violet-400 ring-offset-neutral-950"
-      : "ring-sky-400 ring-offset-neutral-950";
+  const summary = summarizeTurn(turn);
+  const isPinpoint = pinpointPosition === "pin";
+
+  const status: TurnStatus = isPinpoint ? "pinpoint" : turnStatus(turn);
+  const spineColor = SPINE_COLOR[status];
+  const ringHex = isPinpoint
+    ? "#fbbf24"
+    : ringColor === "violet"
+      ? "#a78bfa"
+      : "#38bdf8";
+
+  // Selection wins; pinpoint adds an amber halo when not selected.
+  let boxShadow: string | undefined;
+  if (selected) {
+    boxShadow = `0 0 0 2px var(--background), 0 0 0 4px ${ringHex}`;
+  } else if (isPinpoint) {
+    boxShadow = `0 0 0 2px var(--background), 0 0 0 3px ${ringHex}, 0 0 28px 4px rgba(251,191,36,0.45)`;
+  }
+
+  let bg: string | undefined;
+  let borderColor: string | undefined;
+  let filter: string | undefined;
+  if (isPinpoint) {
+    bg = "rgba(245,158,11,0.14)";
+    borderColor = "rgba(251,191,36,0.7)";
+  } else if (hasError) {
+    bg = "rgba(239,68,68,0.10)";
+    borderColor = "rgba(248,113,113,0.6)";
+  }
+  if (!selected && pinpointPosition === "wasted") {
+    filter = "grayscale(0.4) opacity(0.55)";
+  } else if (!selected && pinpointPosition === "past") {
+    filter = "opacity(0.92)";
+  }
+
+  const baseClasses =
+    isPinpoint || hasError ? "" : "bg-neutral-900 border-neutral-800";
   const diff = aggregateTurnDiff(turn, diffSummary);
+
   return (
     <button
       ref={ref}
       onClick={onClick}
-      className={`w-48 shrink-0 text-left rounded border px-3 py-2 transition-all ${turnAccent(
-        turn,
-      )} ${
-        selected ? `ring-2 ring-offset-2 ${ring}` : "hover:brightness-125"
-      }`}
+      className={`relative w-48 shrink-0 text-left rounded border transition-[filter,background] overflow-hidden p-0 hover:brightness-125 ${baseClasses}`}
+      style={{ background: bg, borderColor, boxShadow, filter }}
     >
-      <div className="flex items-baseline justify-between text-[10px] uppercase tracking-wide text-neutral-400">
-        <span className="flex items-center gap-1">
-          {firstFailure && (
-            <span
-              className="w-1.5 h-1.5 rounded-full bg-red-500"
-              title="first failure"
-              aria-label="first failure"
-            />
-          )}
-          turn {turn.turn_index}
-        </span>
-        <span>
-          {firstFailure ? (
-            <span className="text-red-300">first failure</span>
-          ) : (
-            <>
-              {tools.length} tool{tools.length === 1 ? "" : "s"}
-            </>
-          )}
-        </span>
-      </div>
-      <div className="mt-1 text-xs font-medium truncate">
-        {firstText || "(no text)"}
-      </div>
-      <div className="mt-1 flex gap-1 flex-wrap items-center">
-        {tools.slice(0, 4).map((c) => (
+      <div
+        aria-hidden
+        className="absolute left-0 top-0 bottom-0 w-[3px]"
+        style={{
+          background: spineColor,
+          opacity: isPinpoint ? 1 : status === "think" ? 0.5 : 0.85,
+        }}
+      />
+      <div className="pl-3.5 pr-2.5 py-2">
+        <div className="flex items-center justify-between text-[9px] uppercase tracking-wider font-medium whitespace-nowrap">
           <span
-            key={c.id}
-            className={`text-[9px] px-1.5 py-0.5 rounded border ${
-              c.is_error
-                ? "border-red-400/70 text-red-300"
-                : "border-neutral-600 text-neutral-300"
-            }`}
+            className="flex items-center gap-1.5"
+            style={{ color: isPinpoint ? "#fcd34d" : undefined }}
           >
-            {shortToolName(c.tool_name)}
+            {firstFailure && !isPinpoint && (
+              <span
+                className="w-1.5 h-1.5 rounded-full bg-red-500"
+                title="first failure"
+                aria-label="first failure"
+              />
+            )}
+            <span className="font-mono text-neutral-400">
+              turn {String(turn.turn_index).padStart(2, "0")}
+            </span>
+            {hasError && !isPinpoint && (
+              <span className="text-red-400 font-mono text-[10px]">!</span>
+            )}
+            {isPinpoint && <span className="text-amber-300">● break</span>}
           </span>
-        ))}
-        {tools.length > 4 && (
-          <span className="text-[9px] text-neutral-500">
-            +{tools.length - 4}
+          <span className="text-neutral-500 font-mono">
+            {formatDuration(turn.duration_ms)}
           </span>
+        </div>
+        <div
+          className={`mt-1 text-xs font-medium truncate ${
+            hasError ? "text-red-200" : "text-neutral-100"
+          } ${summary.mono ? "font-mono" : ""}`}
+        >
+          <span className="mr-1.5" style={{ color: spineColor }}>
+            {summary.icon}
+          </span>
+          {summary.text}
+        </div>
+        {firstText && (
+          <div className="mt-0.5 text-[11px] text-neutral-500 truncate leading-tight">
+            {firstText}
+          </div>
         )}
-        {diff && (
-          <span
-            className={`ml-auto text-[9px] font-mono px-1.5 py-0.5 rounded border ${diffBadgeClasses(
-              diff,
-            )}`}
-            title={`${diff.added} added · ${diff.removed} removed · ${diff.modified} modified`}
-          >
-            +{diff.added} −{diff.removed} ~{diff.modified}
-          </span>
+        {(tools.length > 0 || diff) && (
+          <div className="mt-1.5 flex gap-1 items-center">
+            {tools.slice(0, 3).map((c) => (
+              <span
+                key={c.id}
+                className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                  c.is_error
+                    ? "border-red-400/70 text-red-300"
+                    : "border-neutral-700 text-neutral-400"
+                }`}
+              >
+                {shortToolName(c.tool_name)}
+              </span>
+            ))}
+            {tools.length > 3 && (
+              <span className="text-[9px] text-neutral-500">
+                +{tools.length - 3}
+              </span>
+            )}
+            {diff && (
+              <span
+                className={`ml-auto text-[9px] font-mono px-1.5 py-0.5 rounded border ${diffBadgeClasses(
+                  diff,
+                )}`}
+                title={`${diff.added} added · ${diff.removed} removed · ${diff.modified} modified`}
+              >
+                +{diff.added} −{diff.removed} ~{diff.modified}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </button>
