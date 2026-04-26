@@ -98,11 +98,13 @@ class _SandboxCache:
         return self._tl_client
 
     def restored(self, snapshot_id: str) -> Any:
+        from tensorlake.sandbox import Sandbox
+
         with self._lock:
             sb = self._restored.get(snapshot_id)
             if sb is not None:
                 return sb
-            sb = self.tl_client().create_and_connect(snapshot_id=snapshot_id)
+            sb = Sandbox.create(snapshot_id=snapshot_id)
             self._restored[snapshot_id] = sb
             return sb
 
@@ -881,16 +883,17 @@ async def _execute_fork(
     snapshot_id: str,
     system_prompt: str,
 ) -> None:
+    from tensorlake.sandbox import Sandbox
+
     sandbox: Any = None
     try:
-        tl = SANDBOX_CACHE.tl_client()
         print(
             f"[fork] run {new_run_id} restoring snapshot_id={snapshot_id}",
             file=sys.stderr,
         )
         # Dedicated restore — not put in SANDBOX_CACHE so the agent's
         # mutations don't race cached readers using the same snapshot.
-        sandbox = tl.create_and_connect(snapshot_id=snapshot_id)
+        sandbox = Sandbox.create(snapshot_id=snapshot_id)
         with get_session() as s:
             r = s.get(Run, new_run_id)
             if r is not None:

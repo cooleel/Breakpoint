@@ -10,7 +10,7 @@ dependencies = [
     "fastapi>=0.136.0",
     "python-dotenv>=1.2.2",
     "sqlmodel>=0.0.38",
-    "tensorlake>=0.4.45",
+    "tensorlake>=0.5.1",
     "uvicorn[standard]>=0.44.0",
 ]
 

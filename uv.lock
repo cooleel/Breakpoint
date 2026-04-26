@@ -101,7 +101,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "sqlmodel", specifier = ">=0.0.38" },
-    { name = "tensorlake", specifier = ">=0.4.45" },
+    { name = "tensorlake", specifier = ">=0.5.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.44.0" },
 ]
 provides-extras = ["dev"]
@@ -1320,7 +1320,7 @@ wheels = [
 
 [[package]]
 name = "tensorlake"
-version = "0.4.45"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "grpcio" },
@@ -1329,12 +1329,12 @@ dependencies = [
     { name = "pydantic" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/54/d6/7b67130691cf4fba0d9e4b0c10716fc995c161c764c079924df1ad486994/tensorlake-0.4.45.tar.gz", hash = "sha256:d5c17625ff1d8e6c7915983103d1a4efa39d5580ee33a333a4660952dd2d3766", size = 2240922, upload-time = "2026-04-12T23:04:47.95Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/6b/66538eb5b0cc71940499cede88e244228d8d322c6fd3ed7dfe21b6c62672/tensorlake-0.5.1.tar.gz", hash = "sha256:b3a0d264882bfd29d5682db0668a5354ba9ae67a7d18272c9c03e54110e31d60", size = 2254402, upload-time = "2026-04-25T21:58:19.683Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/85/13ca8b6377ad186974d15d24897591dbeb39d13fe31b94b0fcae6ed45f60/tensorlake-0.4.45-py3-none-macosx_11_0_arm64.whl", hash = "sha256:81a8d65c7e8816a11fac70d56f411fb02a114e5f9c239c304bd37a17bcede13a", size = 12820144, upload-time = "2026-04-12T23:04:36.699Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/e0/6ab285a5a353c4fca1381013d0a940fba0da524a070c147e6f9e4bf4155b/tensorlake-0.4.45-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5c8f792a2ebd3b446403998f5c85c1d0ce6b9a67a1e2bc0d28e4c544ad1eceff", size = 13305371, upload-time = "2026-04-12T23:04:39.645Z" },
-    { url = "https://files.pythonhosted.org/packages/14/02/1918af6d298c61551d6953ad3749f2c2602d8727420c5be06dcd632db75e/tensorlake-0.4.45-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c3a730b032ec6366b478c541c11f463e131973a10c94bd8b21ed8db8d987003f", size = 13779829, upload-time = "2026-04-12T23:04:42.475Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/d9/0f3f2f1a1adefcf8055f9742c76ec202495b5d4ed1d6a9bee20ddc9ee21e/tensorlake-0.4.45-py3-none-win_amd64.whl", hash = "sha256:86e083707b757ba5c04aa45a76c753f9741f4eed8e066eac6e878887a063b0ab", size = 14244442, upload-time = "2026-04-12T23:04:45.221Z" },
+    { url = "https://files.pythonhosted.org/packages/70/ca/84cb2bd48bcd4b6b77b1712d8eb65c1d476a6dd041de5bae8570fe8cee57/tensorlake-0.5.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:944079d3d937c0486d509ddc8e5b8030c9ff25525a34d4d7716b6fc701155d8f", size = 12914865, upload-time = "2026-04-25T21:58:09.299Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/76/b07f816256d15ad083660d05106c6f0f29fa0eed40cb687e426a8273d67a/tensorlake-0.5.1-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8de557befd1695d683beb6d602c804996cb983dbdb3b49e2cad703a9ccae644b", size = 13414619, upload-time = "2026-04-25T21:58:11.807Z" },
+    { url = "https://files.pythonhosted.org/packages/19/38/45685a72680832fb45971abc4fd282c439a891ecc441300fbdc6b5214553/tensorlake-0.5.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:24f565e4f05b1d90cf581f131b875a0be5a7053a8461376e9fee30976ca294d1", size = 13865197, upload-time = "2026-04-25T21:58:14.434Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/9a/337fe0264ab1c0e7b89b79a4c8f73d184619c7944ccd3d01d3e0d7c06b43/tensorlake-0.5.1-py3-none-win_amd64.whl", hash = "sha256:91fa9ccb4dc33a7d670a0b3438d9c1afe50b7ff77519e7af4ff5cd79ed385422", size = 14384138, upload-time = "2026-04-25T21:58:17.163Z" },
 ]
 
 [[package]]
