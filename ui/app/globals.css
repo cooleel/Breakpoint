@@ -3,6 +3,7 @@
 :root {
   --background: #0a0a0a;
   --foreground: #ededed;
+  --header-fade: rgba(0, 0, 0, 0.25);
 }
 
 @theme inline {
@@ -14,22 +15,60 @@
 
 /* Light mode: flip the neutral scale so every existing `*-neutral-*` utility
    (backgrounds, text, borders) reads correctly on a light background without
-   touching component files. Accent colors (sky/violet/amber/red/emerald) are
-   left alone — they work in both modes. */
+   touching component files. The light shades of accent colors (used as text
+   on dark surfaces) are flipped to their dark counterparts so they remain
+   readable on white. Shades 400–500 (borders and tinted backgrounds at low
+   alpha) read correctly in both modes and are left alone. */
 html[data-theme="light"] {
   --background: #ffffff;
   --foreground: #171717;
+  --header-fade: rgba(0, 0, 0, 0.04);
 
   --color-neutral-950: oklch(100% 0 0);
   --color-neutral-900: oklch(98% 0 0);
   --color-neutral-800: oklch(92% 0 0);
-  --color-neutral-700: oklch(86% 0 0);
-  --color-neutral-600: oklch(74% 0 0);
-  --color-neutral-500: oklch(55% 0 0);
-  --color-neutral-400: oklch(42% 0 0);
-  --color-neutral-300: oklch(30% 0 0);
-  --color-neutral-200: oklch(22% 0 0);
-  --color-neutral-100: oklch(15% 0 0);
+  --color-neutral-700: oklch(80% 0 0);
+  --color-neutral-600: oklch(58% 0 0);
+  --color-neutral-500: oklch(48% 0 0);
+  --color-neutral-400: oklch(38% 0 0);
+  --color-neutral-300: oklch(28% 0 0);
+  --color-neutral-200: oklch(20% 0 0);
+  --color-neutral-100: oklch(13% 0 0);
+  --color-neutral-50: oklch(8% 0 0);
+
+  --color-violet-200: oklch(43.2% 0.232 292.759);
+  --color-violet-300: oklch(49.1% 0.27 292.581);
+
+  --color-sky-100: oklch(39.1% 0.09 240.876);
+  --color-sky-200: oklch(44.3% 0.11 240.79);
+  --color-sky-300: oklch(50% 0.134 242.749);
+
+  --color-amber-200: oklch(47.3% 0.137 46.201);
+  --color-amber-300: oklch(55.5% 0.163 48.998);
+
+  --color-emerald-300: oklch(50.8% 0.118 165.612);
+
+  --color-red-200: oklch(44.4% 0.177 26.899);
+  --color-red-300: oklch(50.5% 0.213 27.518);
+}
+
+/* Escape hatch: components with a hardcoded dark surface (e.g. the violet-
+   gradient PinpointPopup) wrap themselves in `data-surface="dark"` so the
+   light-mode overrides above are reset back to Tailwind defaults inside,
+   keeping their light-on-dark text legible. Only the vars actually painted
+   inside such surfaces need resetting. */
+html[data-theme="light"] [data-surface="dark"] {
+  --color-neutral-50: oklch(98.5% 0 0);
+  --color-neutral-300: oklch(87% 0 0);
+  --color-neutral-400: oklch(70.8% 0 0);
+  --color-neutral-500: oklch(55.6% 0 0);
+
+  --color-violet-200: oklch(89.4% 0.057 293.283);
+  --color-violet-300: oklch(81.1% 0.111 293.571);
+
+  --color-amber-300: oklch(87.9% 0.169 91.605);
+
+  --color-emerald-300: oklch(84.5% 0.143 164.978);
 }
 
 body {

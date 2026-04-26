@@ -780,7 +780,7 @@ function Inspector() {
           className="border-b border-neutral-800 flex items-stretch min-h-[132px]"
           style={{
             background:
-              "linear-gradient(180deg, var(--background) 0%, rgba(0,0,0,0.25) 100%)",
+              "linear-gradient(180deg, var(--background) 0%, var(--header-fade) 100%)",
           }}
         >
           <div className="flex-1 min-w-0 px-7 pt-5 pb-4 flex flex-col gap-3 border-r border-neutral-800">
@@ -920,10 +920,10 @@ function Inspector() {
             >
               Jump to first failure
             </button>
-            <div className="mt-auto flex items-center justify-between text-[9px] uppercase tracking-[0.10em] text-neutral-600">
+            <div className="mt-auto flex items-center justify-between text-[9px] uppercase tracking-[0.10em] text-neutral-400">
               <span className="flex items-center gap-1">
                 <span className="font-mono">← →</span> scrub
-                <span className="w-px h-2 bg-neutral-800 mx-0.5" />
+                <span className="w-px h-2 bg-neutral-700 mx-0.5" />
                 <span className="font-mono">F</span> fork
               </span>
               <button

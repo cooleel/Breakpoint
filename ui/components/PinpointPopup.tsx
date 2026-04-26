@@ -44,6 +44,7 @@ export function PinpointPopup({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        data-surface="dark"
         className="relative w-full max-w-[880px] max-h-[calc(100vh-64px)] overflow-y-auto rounded-xl border border-violet-400/55 px-9 pt-7 pb-7 shadow-[0_24px_80px_rgba(0,0,0,0.6)] animate-[pp-rise_200ms_ease-out]"
         style={{
           background:
