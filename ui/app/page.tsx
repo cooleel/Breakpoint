@@ -918,9 +918,34 @@ function Inspector() {
               </div>
               {run?.final_verdict_status === "fail" &&
                 run.final_verdict_text && (
-                  <div className="mt-2 px-2.5 py-1.5 rounded border border-red-500/40 bg-red-500/[0.08] text-[11px] text-red-200 font-mono leading-snug">
-                    <strong className="font-semibold">verifier:</strong>{" "}
-                    {run.final_verdict_text}
+                  <div
+                    role="alert"
+                    className="mt-2 px-3.5 py-3 min-h-[64px] rounded border border-red-500/50 bg-red-500/[0.10] flex items-center gap-3 shadow-[0_0_0_1px_rgba(248,113,113,0.10),0_0_24px_-8px_rgba(248,113,113,0.45)]"
+                  >
+                    <svg
+                      aria-hidden
+                      viewBox="0 0 24 24"
+                      className="w-7 h-7 shrink-0 text-red-400 drop-shadow-[0_0_6px_rgba(248,113,113,0.55)]"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M12 3 1.5 21h21L12 3Z" />
+                      <path d="M12 10v5" />
+                      <circle cx="12" cy="18" r="0.6" fill="currentColor" stroke="none" />
+                    </svg>
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <div className="text-[15px] font-bold tracking-[0.04em] text-red-200 leading-tight uppercase">
+                        Data loss detected
+                      </div>
+                      <div
+                        className="text-[11px] text-red-300/80 font-mono leading-snug line-clamp-2"
+                        title={run.final_verdict_text}
+                      >
+                        {run.final_verdict_text}
+                      </div>
+                    </div>
                   </div>
                 )}
             </div>
