@@ -192,13 +192,13 @@ export const TurnCard = forwardRef<HTMLButtonElement, Props>(function TurnCard(
       ? "#a78bfa"
       : "#38bdf8";
 
-  // Selection wins; pinpoint adds an amber halo when not selected.
+  const ring = (w: number) =>
+    `0 0 0 2px var(--background), 0 0 0 ${w}px ${ringHex}`;
+  const amberHalo =
+    "0 14px 40px -8px rgba(251,191,36,0.5), 0 0 36px 6px rgba(251,191,36,0.45)";
   let boxShadow: string | undefined;
-  if (selected) {
-    boxShadow = `0 0 0 2px var(--background), 0 0 0 4px ${ringHex}`;
-  } else if (isPinpoint) {
-    boxShadow = `0 0 0 2px var(--background), 0 0 0 3px ${ringHex}, 0 0 28px 4px rgba(251,191,36,0.45)`;
-  }
+  if (selected) boxShadow = `${ring(4)}${isPinpoint ? `, ${amberHalo}` : ""}`;
+  else if (isPinpoint) boxShadow = `${ring(3)}, ${amberHalo}`;
 
   let bg: string | undefined;
   let borderColor: string | undefined;
@@ -220,12 +220,22 @@ export const TurnCard = forwardRef<HTMLButtonElement, Props>(function TurnCard(
     isPinpoint || hasError ? "" : "bg-neutral-900 border-neutral-800";
   const diff = aggregateTurnDiff(turn, diffSummary);
 
+  // Delayed bounce so the lift lands AFTER the trajectory sweep + label drop.
+  const pinpointStyle: React.CSSProperties = isPinpoint
+    ? {
+        transform: "scale(1.05)",
+        zIndex: 5,
+        animation:
+          "bp-card-lift 300ms cubic-bezier(0.34, 1.56, 0.64, 1) 420ms both",
+      }
+    : {};
+
   return (
     <button
       ref={ref}
       onClick={onClick}
       className={`relative w-48 shrink-0 text-left rounded border transition-[filter,background] overflow-hidden p-0 hover:brightness-125 ${baseClasses}`}
-      style={{ background: bg, borderColor, boxShadow, filter }}
+      style={{ background: bg, borderColor, boxShadow, filter, ...pinpointStyle }}
     >
       <div
         aria-hidden
