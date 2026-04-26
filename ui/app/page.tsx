@@ -147,6 +147,10 @@ function Inspector() {
   // `isSyncingRef` dance in Timeline/ForkTimelineRow for how we break the
   // scroll-event echo loop.
   const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
+  // Parent timeline's scrollWidth, propagated to fork rows so they pad up to
+  // the same scroll range. Without this the browser clamps each fork's
+  // scrollLeft to its own (shorter) content, breaking shared scrub alignment.
+  const [timelineScrollWidth, setTimelineScrollWidth] = useState(0);
   // Bumped to request a "center the selected card" scroll in the active row.
   // Decoupled from selection state so jumping to an already-selected turn
   // (common when first-failure auto-selects on load) still re-centers.
@@ -1086,6 +1090,7 @@ function Inspector() {
                 onSelectTurn={onSelectParentTurn}
                 scrollLeft={timelineScrollLeft}
                 onScrollLeftChange={setTimelineScrollLeft}
+                onScrollWidthChange={setTimelineScrollWidth}
                 diffSummary={diffByToolCallId}
                 firstFailureTurnId={
                   firstFailureByRunId.get(run.id)?.turnId ?? null
@@ -1109,6 +1114,7 @@ function Inspector() {
                   onSelectTurn={onSelectForkTurn}
                   scrollLeft={timelineScrollLeft}
                   onScrollLeftChange={setTimelineScrollLeft}
+                  minScrollWidthPx={timelineScrollWidth}
                   diffSummary={diffByToolCallId}
                   firstFailureTurnId={
                     firstFailureByRunId.get(f.id)?.turnId ?? null

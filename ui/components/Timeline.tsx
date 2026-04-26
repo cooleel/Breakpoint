@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { DiffSummaryEntry, RunStatus, Turn, VerdictStatus } from "@/lib/api";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import { useTimelineAutoScroll } from "@/lib/useTimelineAutoScroll";
@@ -17,6 +17,7 @@ export function Timeline({
   onSelectTurn,
   scrollLeft,
   onScrollLeftChange,
+  onScrollWidthChange,
   diffSummary,
   firstFailureTurnId,
   pinpointTurnId,
@@ -29,6 +30,10 @@ export function Timeline({
   onSelectTurn: (turnId: string) => void;
   scrollLeft: number;
   onScrollLeftChange: (scrollLeft: number) => void;
+  // Reports the inner content width so fork rows can pad themselves to the
+  // same scroll range — otherwise the parent's scrollLeft gets clamped on
+  // narrower fork rows and the fork content + arrow stop tracking the parent.
+  onScrollWidthChange?: (n: number) => void;
   diffSummary?: Map<string, DiffSummaryEntry>;
   firstFailureTurnId?: string | null;
   pinpointTurnId?: string | null;
@@ -39,6 +44,17 @@ export function Timeline({
     scrollLeft,
     onScrollLeftChange,
   );
+  const innerRef = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    const el = innerRef.current;
+    if (!el || !onScrollWidthChange) return;
+    const report = () => onScrollWidthChange(el.scrollWidth);
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onScrollWidthChange, turns.length]);
 
   useTimelineAutoScroll(
     containerRef,
@@ -87,7 +103,7 @@ export function Timeline({
         ref={containerRef}
         className="relative overflow-x-auto overflow-y-hidden"
       >
-        <ol className={`flex gap-2 px-4 min-w-max items-stretch ${hasPinpoint ? "pt-12 pb-10" : "pt-7 pb-4"}`}>
+        <ol ref={innerRef} className={`flex gap-2 px-4 min-w-max items-stretch ${hasPinpoint ? "pt-12 pb-10" : "pt-7 pb-4"}`}>
           {turns.map((t, i) => {
             const selected = t.id === selectedTurnId;
             const position: PinpointPosition | undefined =

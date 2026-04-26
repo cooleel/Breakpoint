@@ -28,6 +28,7 @@ export function ForkTimelineRow({
   onSelectTurn,
   scrollLeft,
   onScrollLeftChange,
+  minScrollWidthPx,
   diffSummary,
   firstFailureTurnId,
   centerNonce,
@@ -43,6 +44,10 @@ export function ForkTimelineRow({
   onSelectTurn: (turnId: string) => void;
   scrollLeft: number;
   onScrollLeftChange: (scrollLeft: number) => void;
+  // Parent timeline's scrollWidth — fork content min-width is padded up to
+  // this so the shared scrollLeft applies cleanly on rows shorter than the
+  // parent (otherwise the browser clamps and the arrow drifts off the button).
+  minScrollWidthPx?: number;
   diffSummary?: Map<string, DiffSummaryEntry>;
   firstFailureTurnId?: string | null;
   centerNonce?: number;
@@ -94,10 +99,13 @@ export function ForkTimelineRow({
       </div>
       <div ref={containerRef} className="overflow-x-auto overflow-y-hidden">
         <div
-          className="flex items-stretch gap-2 py-3 min-w-max"
+          className="flex items-stretch gap-2 py-3"
           style={{
             paddingLeft: ROW_PADDING_X_PX + indentPx,
             paddingRight: ROW_PADDING_X_PX,
+            minWidth: minScrollWidthPx
+              ? `max(max-content, ${minScrollWidthPx}px)`
+              : "max-content",
           }}
         >
           <button
