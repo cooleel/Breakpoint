@@ -183,6 +183,8 @@ function Inspector() {
   searchParamsRef.current = searchParams;
   const runRef = useRef<RunDetail | null>(run);
   runRef.current = run;
+  const runsRef = useRef<RunSummary[]>(runs);
+  runsRef.current = runs;
   const turnIdRef = useRef<string | null>(turnId);
   turnIdRef.current = turnId;
   const forkIdRef = useRef<string | null>(forkId);
@@ -352,17 +354,32 @@ function Inspector() {
   }, [runs, updateQuery]);
 
   // Poll the active run's detail while anything in its tree is still running.
+  // Continue for a few ticks after the run flips to done — post-Stop side
+  // effects (e.g. demo/task.py writing the final_verdict_* columns ~1-3s after
+  // the agent's Stop hook) need a chance to land before we go quiet.
+  const POST_DONE_GRACE_TICKS = 6;
+  const graceTicksRef = useRef(POST_DONE_GRACE_TICKS);
   useEffect(() => {
     if (!runId) return;
+    graceTicksRef.current = POST_DONE_GRACE_TICKS;
     let cancelled = false;
     const id = window.setInterval(() => {
+      if (cancelled) return;
       const current = runRef.current;
       const anyRunning =
         !current ||
         current.status === "running" ||
         current.forks.some((f) => f.status === "running");
-      if (!anyRunning || cancelled) return;
-      loadRun(runId).catch(() => {});
+      if (anyRunning) {
+        graceTicksRef.current = POST_DONE_GRACE_TICKS;
+        loadRun(runId).catch(() => {});
+        return;
+      }
+      if (current?.final_verdict_status) return;
+      if (graceTicksRef.current > 0) {
+        graceTicksRef.current -= 1;
+        loadRun(runId).catch(() => {});
+      }
     }, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
@@ -456,7 +473,14 @@ function Inspector() {
     return m;
   }, [run]);
 
-  const activeTurns: Turn[] = activeFork ? activeFork.turns : (run?.turns ?? []);
+  // When forkId is set but the fork isn't in run.forks yet (briefly true right
+  // after `onForked` updates the URL — before loadRun's response lands), treat
+  // turns as empty rather than silently showing parent.turns. Otherwise the
+  // followLatest effect would auto-select the parent's last turn during that
+  // window.
+  const activeTurns: Turn[] = forkId
+    ? (activeFork?.turns ?? [])
+    : (run?.turns ?? []);
 
   // Track whether the user is pinned to the bottom of the rows scroller.
   useEffect(() => {
@@ -660,9 +684,21 @@ function Inspector() {
   const activeSelectionInParent = !forkId;
   const selectedTurnId = turnId;
 
-  const activeFirstFailure = activeRunId
-    ? firstFailureByRunId.get(activeRunId) ?? null
-    : null;
+  // Prefer a real tool-call failure (red pip). If there isn't one but the
+  // parent's verdict still flagged failure (e.g. demo's post-run probe finds
+  // DATA LOSS even though every sandbox_bash returned exit 0), fall back to
+  // the last turn — that's where the agent left the broken state. Forks
+  // don't expose verdict in the API yet, so this fallback is parent-only.
+  const activeFirstFailure = useMemo(() => {
+    if (!activeRunId || !run) return null;
+    const tcFailure = firstFailureByRunId.get(activeRunId);
+    if (tcFailure) return tcFailure;
+    if (activeFork || run.final_verdict_status !== "fail") return null;
+    const lastTurn = run.turns[run.turns.length - 1];
+    if (!lastTurn) return null;
+    const lastTool = lastTurn.tool_calls[lastTurn.tool_calls.length - 1];
+    return { turnId: lastTurn.id, toolCallId: lastTool?.id ?? null };
+  }, [activeRunId, activeFork, run, firstFailureByRunId]);
   const onJumpToFirstFailure = useCallback(() => {
     if (!activeFirstFailure) return;
     setFollowLatest(false);
@@ -731,17 +767,22 @@ function Inspector() {
       setForkTarget(null);
       // Follow the new fork live as it runs.
       setFollowLatest(true);
-      // refresh first so `runs` includes the new fork — needed for
-      // findRootRunId to resolve fork-of-fork chains up to the ultimate root.
-      const rs = await refreshRuns();
-      const rootId = findRootRunId(rs, res.parent_run_id);
-      await loadRun(rootId);
+      // The parent of the new fork is already in `runs` (only the fork itself
+      // is missing), so we can resolve the root immediately and switch the URL
+      // before the network round-trip — the user sees the fork as active right
+      // away instead of after refreshRuns + loadRun resolve.
+      const rootId = findRootRunId(runsRef.current, res.parent_run_id);
       updateQuery({
         run: rootId,
         fork: res.run_id,
         turn: null,
         tool: null,
       });
+      // Now refresh sidebar and reload the parent so `run.forks` includes the
+      // new fork (which renders the fork's TimelineRow). Bust the run cache so
+      // a stale poll response doesn't suppress the setRun.
+      lastRunJsonRef.current = null;
+      await Promise.all([refreshRuns(), loadRun(rootId)]);
     },
     [refreshRuns, loadRun, updateQuery],
   );
