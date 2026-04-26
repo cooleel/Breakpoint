@@ -31,7 +31,7 @@ Env: `ANTHROPIC_API_KEY` + `TENSORLAKE_API_KEY` in `.env` (or `tensorlake login`
 
 ## Architecture
 
-**Two processes**: the agent (Claude Agent SDK `ClaudeSDKClient`) runs on the host; tool side-effects execute inside a Tensorlake sandbox via custom MCP tools, never on the host. Snapshots of the sandbox (not the agent process) become time-travel anchors stored alongside each `ToolCall` row.
+**Two processes**: the agent (Claude Agent SDK `ClaudeSDKClient`) runs on the host; tool side-effects execute inside a Tensorlake sandbox via custom MCP tools, never on the host. Snapshots of the sandbox (not the agent process) become rewind anchors stored alongside each `ToolCall` row.
 
 **Host-cwd gap — critical invariant**: built-in `Write` / `Read` / `Bash` tools operate on the host cwd and would snapshot an empty sandbox. They are excluded from `allowed_tools`. `inspector/sandbox_tools.py` registers replacements (`mcp__inspector__sandbox_write` / `sandbox_read` / `sandbox_bash`) as an in-process SDK MCP server. `inspector/session.py::Inspector.run_agent` auto-wires this server and defaults `allowed_tools` to `ALLOWED_TOOL_IDS` whenever a `sandbox` is passed. Don't add the built-ins back.
 
