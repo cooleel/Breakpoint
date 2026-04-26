@@ -992,31 +992,32 @@ function Inspector() {
             </button>
           )}
 
-          <div className="w-[220px] shrink-0 px-5 py-4 flex flex-col gap-2">
+          <div className="w-[240px] shrink-0 px-5 py-4 flex flex-col gap-1.5">
             {activeFirstFailure && (
-              <button
-                type="button"
-                onClick={onFindBreakpoint}
-                disabled={findingBreakpointForRunId === activeRunId || !!demo}
-                title={
-                  demo
-                    ? demo.tooltip
-                    : "Have Opus 4.7 read the trajectory and identify the root cause"
-                }
-                className="text-[13px] px-3.5 py-2.5 rounded border border-violet-400/60 text-violet-200 bg-violet-500/[0.18] hover:bg-violet-500/25 normal-case tracking-normal whitespace-nowrap font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {findBreakpointLabel}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onFindBreakpoint}
+                  disabled={findingBreakpointForRunId === activeRunId || !!demo}
+                  title={
+                    demo
+                      ? demo.tooltip
+                      : "Have Opus 4.7 read the trajectory and identify the root cause"
+                  }
+                  className="animate-[cta-enter_280ms_ease-out_both] text-sm px-4 py-3 rounded bg-violet-500 text-white hover:bg-violet-400 active:bg-violet-600 whitespace-nowrap font-semibold shadow-[0_0_24px_-6px_rgba(167,139,250,0.65),0_1px_0_0_rgba(255,255,255,0.08)_inset] transition-colors disabled:opacity-70 disabled:cursor-not-allowed disabled:shadow-none"
+                >
+                  {findBreakpointLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={onJumpToFirstFailure}
+                  title="Open the first failed tool call in this row"
+                  className="text-[12px] px-2 py-1.5 self-center text-neutral-400 hover:text-neutral-100 bg-transparent whitespace-nowrap font-medium underline-offset-4 hover:underline"
+                >
+                  Jump to first failure
+                </button>
+              </>
             )}
-            <button
-              type="button"
-              onClick={onJumpToFirstFailure}
-              disabled={!activeFirstFailure}
-              title="Open the first failed tool call in this row"
-              className="text-[13px] px-3.5 py-2.5 rounded border border-neutral-700 text-neutral-300 bg-transparent hover:bg-neutral-900 normal-case tracking-normal whitespace-nowrap font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Jump to first failure
-            </button>
             <div className="mt-auto flex items-center justify-between text-[9px] uppercase tracking-[0.10em] text-neutral-400">
               <span className="flex items-center gap-1">
                 <span className="font-mono">← →</span> scrub
