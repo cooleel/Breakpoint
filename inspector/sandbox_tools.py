@@ -36,6 +36,23 @@ ALLOWED_TOOL_IDS: list[str] = [
 MAX_READ_BYTES = 500_000
 MAX_STDOUT_CHARS = 20_000
 BASH_TIMEOUT_S = 120.0
+DEFAULT_SANDBOX_CWD = "/workspace"
+
+
+def format_run_result(
+    result: Any, *, stdout_cap: int = MAX_STDOUT_CHARS, stderr_cap: int = MAX_STDOUT_CHARS
+) -> str:
+    """Format a sandbox.run() result as the canonical exit_code/stdout/stderr
+    block the agent + critic both consume. ``getattr`` guards against fakes or
+    partial-failure results that don't have every field set."""
+    stdout = (getattr(result, "stdout", "") or "")[:stdout_cap]
+    stderr = (getattr(result, "stderr", "") or "")[:stderr_cap]
+    exit_code = getattr(result, "exit_code", "?")
+    return (
+        f"exit_code={exit_code}\n"
+        f"--- stdout ---\n{stdout}\n"
+        f"--- stderr ---\n{stderr}"
+    )
 
 
 def build_sandbox_mcp_server(sandbox: Any):
@@ -87,7 +104,7 @@ def build_sandbox_mcp_server(sandbox: Any):
     )
     async def sandbox_bash(args: dict[str, Any]) -> dict[str, Any]:
         command = args["command"]
-        working_dir = args.get("working_dir") or "/workspace"
+        working_dir = args.get("working_dir") or DEFAULT_SANDBOX_CWD
         try:
             result = sandbox.run(
                 "bash",
@@ -100,11 +117,8 @@ def build_sandbox_mcp_server(sandbox: Any):
                 "content": [{"type": "text", "text": f"bash failed: {e}"}],
                 "is_error": True,
             }
-        stdout = (result.stdout or "")[:MAX_STDOUT_CHARS]
-        stderr = (result.stderr or "")[:MAX_STDOUT_CHARS]
-        body = f"exit_code={result.exit_code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
         return {
-            "content": [{"type": "text", "text": body}],
+            "content": [{"type": "text", "text": format_run_result(result)}],
             "is_error": result.exit_code != 0,
         }
 

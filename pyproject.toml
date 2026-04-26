@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Find where your agent actually broke, not where it crashed."
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.40.0",
     "claude-agent-sdk>=0.1.63",
     "e2b>=2.20.0",
     "fastapi>=0.136.0",

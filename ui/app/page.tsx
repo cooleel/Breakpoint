@@ -17,6 +17,7 @@ import { RunSidebar } from "@/components/RunSidebar";
 import { Timeline } from "@/components/Timeline";
 import { InspectorPanel } from "@/components/InspectorPanel";
 import { FilePreview } from "@/components/FilePreview";
+import { ExecPanel } from "@/components/ExecPanel";
 import { ForkModal } from "@/components/ForkModal";
 import { ForkTimelineRow } from "@/components/ForkTimelineRow";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -122,6 +123,7 @@ function Inspector() {
   const [runError, setRunError] = useState<string | null>(null);
 
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const [bottomTab, setBottomTab] = useState<"file" | "exec">("file");
   const [forkTarget, setForkTarget] = useState<ToolCall | null>(null);
   // When the user clicks "Fork from breakpoint with fix", we precompute the
   // system prompt (parent prompt + Opus's suggested fix) and stash it here so
@@ -152,6 +154,10 @@ function Inspector() {
   // `isSyncingRef` dance in Timeline/ForkTimelineRow for how we break the
   // scroll-event echo loop.
   const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
+  // Bumped to request a "center the selected card" scroll in the active row.
+  // Decoupled from selection state so jumping to an already-selected turn
+  // (common when first-failure auto-selects on load) still re-centers.
+  const [centerNonce, setCenterNonce] = useState(0);
 
   // Initial value comes from the data-theme the inline script in layout.tsx
   // already wrote before paint — avoids a one-frame flash when the saved theme
@@ -198,6 +204,10 @@ function Inspector() {
   // when the payload actually changes, avoiding downstream re-renders.
   const lastRunJsonRef = useRef<string | null>(null);
   const lastRunsJsonRef = useRef<string | null>(null);
+  // Set of run ids observed in the most recent /runs response. Null until the
+  // first non-empty fetch — distinguishes "we've never seen a list" from
+  // "list is empty" so first-load auto-select still fires after Clear All.
+  const seenRunIdsRef = useRef<Set<string> | null>(null);
 
   // Holds the most recently written query string within a tick so back-to-back
   // updateQuery calls don't stomp each other via a stale searchParamsRef.
@@ -281,12 +291,16 @@ function Inspector() {
           ? d.forks.find((f) => f.id === forkIdRef.current)
           : null;
         const turns = activeFork ? activeFork.turns : d.turns;
+        const status = activeFork ? activeFork.status : d.status;
         const currentTurn = searchParamsRef.current.get("turn");
         const hasTurn = currentTurn && turns.some((t) => t.id === currentTurn);
         if (!hasTurn && turns.length > 0) {
-          // Open at the smoking gun if there is one — otherwise the latest
-          // turn (live progress for running tasks, end-state for completed).
-          const fft = findFirstFailure(turns);
+          // For a completed run, open at the smoking gun if there is one — the
+          // user is post-morteming, not watching live. For a still-running run
+          // we always follow the latest so polling keeps auto-scrubbing; pinning
+          // to an early failure here would leave followLatest=false and freeze
+          // the scrubber for the rest of the session.
+          const fft = status === "running" ? null : findFirstFailure(turns);
           if (fft) {
             setFollowLatest(false);
             updateQuery({ turn: fft.turnId, tool: fft.toolCallId });
@@ -310,12 +324,30 @@ function Inspector() {
     return () => window.clearInterval(id);
   }, [refreshRuns]);
 
-  // If nothing is selected yet and runs have appeared (e.g. user started a
-  // task from the CLI after opening the UI), auto-select the newest one so
-  // they don't have to click into the sidebar.
+  // Auto-select on first load (CLI task started before UI was opened) and
+  // auto-switch when a brand-new root run appears in a later poll (CLI task
+  // started while the UI was pinned to an old run). Forks have their own
+  // selection paths via onForked / onSelectForkRun, so they're filtered out.
   useEffect(() => {
-    if (searchParamsRef.current.get("run")) return;
     if (runs.length === 0) return;
+    const seen = seenRunIdsRef.current;
+    const newlyAppearedRoot = seen
+      ? runs.find((r) => !seen.has(r.id) && !r.parent_run_id)
+      : null;
+    seenRunIdsRef.current = new Set(runs.map((r) => r.id));
+
+    if (newlyAppearedRoot) {
+      setFollowLatest(true);
+      updateQuery({
+        run: newlyAppearedRoot.id,
+        fork: null,
+        turn: null,
+        tool: null,
+      });
+      return;
+    }
+
+    if (searchParamsRef.current.get("run")) return;
     const first = runs[0];
     if (first.parent_run_id) {
       updateQuery({ run: findRootRunId(runs, first.id), fork: first.id });
@@ -485,6 +517,13 @@ function Inspector() {
     setPreviewPath(null);
   }, [effectiveToolCallId]);
 
+  // Force the file tab so a click on the tree/diff list doesn't silently land
+  // in the hidden Exec tab.
+  const onOpenPath = useCallback((path: string) => {
+    setPreviewPath(path);
+    setBottomTab("file");
+  }, []);
+
   const effectiveToolCallRef = useRef<ToolCall | null>(effectiveToolCall);
   effectiveToolCallRef.current = effectiveToolCall;
 
@@ -550,6 +589,7 @@ function Inspector() {
     }
     lastRunJsonRef.current = null;
     lastRunsJsonRef.current = null;
+    seenRunIdsRef.current = null;
     setRun(null);
     setRuns([]);
     updateQuery({ run: null, fork: null, turn: null, tool: null });
@@ -627,6 +667,7 @@ function Inspector() {
       turn: activeFirstFailure.turnId,
       tool: activeFirstFailure.toolCallId,
     });
+    setCenterNonce((n) => n + 1);
   }, [activeFirstFailure, updateQuery]);
 
   const activeAnalysis: CriticAnalysis | null = activeFork
@@ -686,6 +727,7 @@ function Inspector() {
     (jumpTurnId: string, jumpToolCallId: string) => {
       setFollowLatest(false);
       updateQuery({ turn: jumpTurnId, tool: jumpToolCallId });
+      setCenterNonce((n) => n + 1);
     },
     [updateQuery],
   );
@@ -802,6 +844,7 @@ function Inspector() {
               aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
               title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
               className="ml-2 px-2 py-0.5 rounded border border-neutral-700 text-neutral-400 hover:bg-neutral-900"
+              suppressHydrationWarning
             >
               {theme === "dark" ? "☾ dark" : "☀ light"}
             </button>
@@ -845,6 +888,7 @@ function Inspector() {
                 firstFailureTurnId={
                   firstFailureByRunId.get(run.id)?.turnId ?? null
                 }
+                centerNonce={centerNonce}
               />
             </ErrorBoundary>
             {run.forks.map((f) => (
@@ -862,6 +906,7 @@ function Inspector() {
                   firstFailureTurnId={
                     firstFailureByRunId.get(f.id)?.turnId ?? null
                   }
+                  centerNonce={centerNonce}
                 />
               </ErrorBoundary>
             ))}
@@ -880,18 +925,50 @@ function Inspector() {
                   <FsTree
                     toolCall={effectiveToolCall}
                     selectedPath={previewPath}
-                    onSelectFile={setPreviewPath}
+                    onSelectFile={onOpenPath}
                   />
                 </ErrorBoundary>
               </div>
-              <div className="h-1/2 flex min-h-0 border-t border-neutral-800">
-                <ErrorBoundary label="file preview" resetKey={`${effectiveToolCallId}:${previewPath}`}>
-                  <FilePreview
-                    toolCallId={effectiveToolCallId}
-                    path={previewPath}
-                    onClose={() => setPreviewPath(null)}
+              <div className="h-1/2 flex flex-col min-h-0 border-t border-neutral-800">
+                <div className="flex border-b border-neutral-800 bg-neutral-950">
+                  <BottomTab
+                    label="file"
+                    active={bottomTab === "file"}
+                    onClick={() => setBottomTab("file")}
                   />
-                </ErrorBoundary>
+                  <BottomTab
+                    label="exec"
+                    active={bottomTab === "exec"}
+                    onClick={() => setBottomTab("exec")}
+                    title="Live shell against the restored snapshot"
+                  />
+                </div>
+                {bottomTab === "file" ? (
+                  <ErrorBoundary
+                    label="file preview"
+                    resetKey={`${effectiveToolCallId}:${previewPath}`}
+                  >
+                    <FilePreview
+                      toolCallId={effectiveToolCallId}
+                      path={previewPath}
+                      onClose={() => setPreviewPath(null)}
+                    />
+                  </ErrorBoundary>
+                ) : (
+                  <ErrorBoundary
+                    label="exec"
+                    resetKey={effectiveToolCallId}
+                  >
+                    <ExecPanel
+                      toolCallId={effectiveToolCallId}
+                      hasSnapshot={
+                        !!effectiveToolCall?.snapshot_id &&
+                        !effectiveToolCall.snapshot_failed
+                      }
+                      demo={demo}
+                    />
+                  </ErrorBoundary>
+                )}
               </div>
             </div>
             <div className="w-[28rem] shrink-0 flex flex-col min-h-0">
@@ -901,7 +978,7 @@ function Inspector() {
                   selectedToolCallId={toolCallId}
                   onSelectToolCall={onSelectToolCall}
                   onFork={setForkTarget}
-                  onOpenPath={setPreviewPath}
+                  onOpenPath={onOpenPath}
                   demo={demo}
                 />
               </ErrorBoundary>
@@ -924,5 +1001,32 @@ function Inspector() {
         />
       )}
     </div>
+  );
+}
+
+function BottomTab({
+  label,
+  active,
+  onClick,
+  title,
+}: {
+  label: "file" | "exec";
+  active: boolean;
+  onClick: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`px-3 py-1 text-[10px] uppercase tracking-wide border-r border-neutral-800 ${
+        active
+          ? "text-neutral-200 bg-neutral-900"
+          : "text-neutral-500 hover:text-neutral-300 hover:bg-neutral-900"
+      }`}
+    >
+      {label}
+    </button>
   );
 }

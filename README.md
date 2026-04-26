@@ -30,7 +30,7 @@ failure. Tensorlake sandbox snapshots let you fork from there. Built for the
 ## Try it in 30 seconds — no API keys
 
 ```bash
-git clone https://github.com/REPLACE_ME/breakpoint
+git clone https://github.com/cooleel/breakpoint
 cd breakpoint
 make demo
 ```

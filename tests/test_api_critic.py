@@ -51,7 +51,7 @@ def test_find_breakpoint_persists_and_surfaces(tmp_db, monkeypatch):
     api_main.DB_PATH = tmp_db
     run_id = _seed_failed_run()
 
-    def fake_critic(rid: str):
+    def fake_critic(rid: str, **_kwargs):
         assert rid == run_id
         return {
             "culprit_tool_call_id": "tu_culprit",
@@ -87,7 +87,7 @@ def test_find_breakpoint_500_on_critic_failure(tmp_db, monkeypatch):
     api_main.DB_PATH = tmp_db
     run_id = _seed_failed_run()
 
-    def boom(_rid: str):
+    def boom(_rid: str, **_kwargs):
         raise RuntimeError("opus is sleeping")
 
     monkeypatch.setattr(api_main, "find_breakpoint", boom)

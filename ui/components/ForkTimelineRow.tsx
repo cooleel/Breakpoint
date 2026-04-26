@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { DiffSummaryEntry, ForkTimeline } from "@/lib/api";
+import { useScrollSelectedIntoView } from "@/lib/useScrollSelectedIntoView";
 import { useSyncedHorizontalScroll } from "@/lib/useSyncedHorizontalScroll";
 import {
   CARD_GAP_PX,
@@ -28,6 +29,7 @@ export function ForkTimelineRow({
   onScrollLeftChange,
   diffSummary,
   firstFailureTurnId,
+  centerNonce,
 }: {
   fork: ForkTimeline;
   // Absolute x offset (in px) of the fork's "↳ fork" button from the row's
@@ -42,6 +44,7 @@ export function ForkTimelineRow({
   onScrollLeftChange: (scrollLeft: number) => void;
   diffSummary?: Map<string, DiffSummaryEntry>;
   firstFailureTurnId?: string | null;
+  centerNonce?: number;
 }) {
   const isActive = fork.id === selectedRunId;
   const selectedRef = useRef<HTMLButtonElement>(null);
@@ -50,14 +53,7 @@ export function ForkTimelineRow({
     onScrollLeftChange,
   );
 
-  useEffect(() => {
-    if (!isActive) return;
-    selectedRef.current?.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
-  }, [isActive, selectedTurnId]);
+  useScrollSelectedIntoView(selectedRef, selectedTurnId, centerNonce, isActive);
 
   const arrowLeft = ROW_PADDING_X_PX + indentPx + ARROW_X_OFFSET - scrollLeft;
 

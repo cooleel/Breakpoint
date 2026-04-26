@@ -128,6 +128,27 @@ export type DemoMode = {
   message: string | null;
 };
 
+export type ExecStartResponse = {
+  pid: number;
+  snapshot_id: string;
+};
+
+// SSE frame from /tool-calls/{id}/exec/stream — default message events carry
+// {line,stream}; the terminal `event: end` carries {exit_code,reason}.
+export type ExecLine = {
+  line: string;
+  stream: "stdout" | "stderr" | null;
+};
+
+export type ExecEnd = {
+  exit_code: number | null;
+  reason: "exited" | "timeout" | "disconnected" | "cap" | "error";
+};
+
+export function execStreamUrl(toolCallId: string, pid: number): string {
+  return `${API_BASE}/tool-calls/${toolCallId}/exec/stream?pid=${pid}`;
+}
+
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     cache: "no-store",
@@ -171,6 +192,14 @@ export const api = {
   findBreakpoint: (runId: string) =>
     j<CriticAnalysis>(`${API_BASE}/runs/${runId}/find-breakpoint`, {
       method: "POST",
+    }),
+  execStart: (
+    toolCallId: string,
+    body: { cmd: string; working_dir?: string },
+  ) =>
+    j<ExecStartResponse>(`${API_BASE}/tool-calls/${toolCallId}/exec`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
   getDemoMode: () => j<DemoMode>(`${API_BASE}/demo-mode`),
 };

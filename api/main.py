@@ -1,22 +1,26 @@
 """FastAPI surface for Agent Inspector.
 
 Endpoints:
-  GET  /runs                         — list runs
-  GET  /runs/{id}                    — run + nested turns + tool calls + forks
-  GET  /tool-calls/{id}/fs           — pre-materialized fs tree (instant)
-  GET  /tool-calls/{id}/file?path=   — file contents via snapshot restore (cached)
-  POST /tool-calls/{id}/fork         — restore snapshot + run a fresh agent session
+  GET  /runs                              — list runs
+  GET  /runs/{id}                         — run + nested turns + tool calls + forks
+  GET  /tool-calls/{id}/fs                — pre-materialized fs tree (instant)
+  GET  /tool-calls/{id}/file?path=        — file contents via snapshot restore (cached)
+  POST /tool-calls/{id}/exec              — start an ad-hoc shell command in the snapshot
+  GET  /tool-calls/{id}/exec/stream?pid=  — SSE: live stdout/stderr from that command
+  POST /tool-calls/{id}/fork              — restore snapshot + run a fresh agent session
 
 First file request for a snapshot boots an ephemeral restored sandbox and
 caches the connection; subsequent requests for the same snapshot reuse it.
 """
 from __future__ import annotations
 
+import asyncio
 import atexit
 import json
 import os
 import sys
 import threading
+import time
 import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,8 +28,9 @@ from typing import Any, Optional
 
 import anyio
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import case, delete, func
 from sqlmodel import col, select
@@ -54,6 +59,11 @@ from inspector.storage import (  # noqa: E402
 DB_PATH = os.environ.get("AGENT_INSPECTOR_DB", "inspector.db")
 FORK_MODEL = os.environ.get("AGENT_INSPECTOR_FORK_MODEL", "claude-sonnet-4-6")
 FORK_MAX_TURNS = int(os.environ.get("AGENT_INSPECTOR_FORK_MAX_TURNS", "10"))
+# Live-shell exec at a snapshot. Hard caps so a runaway `tail -f` or `yes`
+# can't pin the API forever — process is killed when either limit trips.
+EXEC_TIMEOUT_SEC = float(os.environ.get("AGENT_INSPECTOR_EXEC_TIMEOUT_SEC", "60"))
+EXEC_MAX_LINES = int(os.environ.get("AGENT_INSPECTOR_EXEC_MAX_LINES", "5000"))
+EXEC_DEFAULT_CWD = os.environ.get("AGENT_INSPECTOR_EXEC_CWD", "/workspace")
 # Demo mode serves a baked-in DB without API keys: blocks endpoints that would
 # need a live Tensorlake restore (file reads, forks) or a live Anthropic call
 # (find-breakpoint — cached analysis on the row keeps the card renderable),
@@ -233,6 +243,16 @@ class FileResponse(BaseModel):
     size: int
     truncated: bool
     content: str
+
+
+class ExecStartRequest(BaseModel):
+    cmd: str
+    working_dir: Optional[str] = None
+
+
+class ExecStartResponse(BaseModel):
+    pid: int
+    snapshot_id: str
 
 
 class ForkRequest(BaseModel):
@@ -641,6 +661,164 @@ def get_file(
     )
 
 
+@app.post("/tool-calls/{tool_call_id}/exec", response_model=ExecStartResponse)
+async def exec_start(
+    tool_call_id: str, body: ExecStartRequest
+) -> ExecStartResponse:
+    """Start an ad-hoc shell command in the snapshot's restored sandbox so
+    users can inspect frozen state (e.g. `cat /tmp/server.log`, `ps aux`,
+    `sqlite3 todos.db .schema`). Mutations land in the cached restored copy,
+    not the original — but that copy is shared with file-preview readers, so
+    the UI should warn before running anything destructive."""
+    _require_live()
+    tc = _get_tool_call(tool_call_id)
+    if not tc.snapshot_id:
+        raise HTTPException(
+            status_code=400,
+            detail="tool call has no snapshot; cannot exec",
+        )
+    cmd = body.cmd.strip()
+    if not cmd:
+        raise HTTPException(status_code=400, detail="empty command")
+    snapshot_id = tc.snapshot_id
+    working_dir = body.working_dir or EXEC_DEFAULT_CWD
+
+    def _start() -> int:
+        sb = SANDBOX_CACHE.restored(snapshot_id)
+        proc = sb.start_process(
+            command="bash",
+            args=["-lc", cmd],
+            working_dir=working_dir,
+        )
+        return int(proc.pid)
+
+    try:
+        pid = await anyio.to_thread.run_sync(_start)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"start failed: {e}")
+    return ExecStartResponse(pid=pid, snapshot_id=snapshot_id)
+
+
+@app.get("/tool-calls/{tool_call_id}/exec/stream")
+async def exec_stream(tool_call_id: str, pid: int, request: Request):
+    """SSE: replay + live-stream a process's combined stdout/stderr.
+
+    Each line lands as a default-event `data: {"line","stream"}` frame. On
+    process exit (or cap/timeout) the server sends a final `event: end` with
+    `{exit_code,reason}` and closes. If the client disconnects, the process
+    is killed best-effort so a runaway `tail -f` doesn't keep ticking inside
+    the cached sandbox after the user closed the tab.
+    """
+    _require_live()
+    tc = _get_tool_call(tool_call_id)
+    if not tc.snapshot_id:
+        raise HTTPException(
+            status_code=400,
+            detail="tool call has no snapshot; cannot stream",
+        )
+    snapshot_id = tc.snapshot_id
+
+    async def gen():
+        # Flush headers + tell EventSource we're alive before any blocking work.
+        yield ": ready\n\n"
+
+        sb = SANDBOX_CACHE.restored(snapshot_id)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        SENTINEL: Any = object()
+
+        # follow_output is a sync iterator backed by SSE — pump it from a
+        # thread into the asyncio queue so we can await disconnect/timeout.
+        def _pump() -> None:
+            try:
+                for ev in sb.follow_output(pid):
+                    loop.call_soon_threadsafe(queue.put_nowait, ev)
+            except Exception as e:
+                loop.call_soon_threadsafe(
+                    queue.put_nowait, ("__error__", repr(e))
+                )
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
+
+        pump_future = loop.run_in_executor(None, _pump)
+
+        deadline = time.monotonic() + EXEC_TIMEOUT_SEC
+        emitted = 0
+        end_reason = "exited"
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    end_reason = "timeout"
+                    break
+                if await request.is_disconnected():
+                    end_reason = "disconnected"
+                    break
+                try:
+                    item = await asyncio.wait_for(
+                        queue.get(), timeout=min(0.5, remaining)
+                    )
+                except asyncio.TimeoutError:
+                    # SSE keepalive — also stops proxies from closing the conn.
+                    yield ": keepalive\n\n"
+                    continue
+                if item is SENTINEL:
+                    break
+                if isinstance(item, tuple) and item and item[0] == "__error__":
+                    yield (
+                        "event: error\n"
+                        f"data: {json.dumps({'message': item[1]})}\n\n"
+                    )
+                    end_reason = "error"
+                    break
+                payload = {
+                    "line": getattr(item, "line", ""),
+                    "stream": getattr(item, "stream", None),
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+                emitted += 1
+                if emitted >= EXEC_MAX_LINES:
+                    end_reason = "cap"
+                    break
+        finally:
+            # Best-effort kill so the process doesn't outlive the stream. Killing
+            # the proc unblocks `follow_output` so the pump thread can exit;
+            # without that wait, abandoned streams leak default-pool threads.
+            def _final() -> Optional[int]:
+                try:
+                    info = sb.get_process(pid)
+                    status_val = getattr(info.status, "value", info.status)
+                    if status_val == "running":
+                        try:
+                            sb.kill_process(pid)
+                        except Exception:
+                            pass
+                    return info.exit_code
+                except Exception:
+                    return None
+
+            try:
+                exit_code = await anyio.to_thread.run_sync(_final)
+            except Exception:
+                exit_code = None
+            try:
+                await asyncio.wait_for(pump_future, timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+            end_payload = {"exit_code": exit_code, "reason": end_reason}
+            yield f"event: end\ndata: {json.dumps(end_payload)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @app.post("/tool-calls/{tool_call_id}/fork", response_model=ForkResponse)
 async def fork(
     tool_call_id: str, body: ForkRequest, background: BackgroundTasks
@@ -763,8 +941,16 @@ async def post_find_breakpoint(run_id: str) -> CriticAnalysisOut:
 
     # Run the synchronous Anthropic call off the event loop so we don't block
     # the polling endpoint from servicing other requests during the wait.
+    # The critic gets `inspect_sandbox` against the same restored-sandbox
+    # cache the file-preview/exec endpoints use, so a `cat /tmp/server.log`
+    # invocation reuses any sandbox already booted for this snapshot.
+    def _run_critic() -> Any:
+        return find_breakpoint(
+            run_id, sandbox_for_snapshot=SANDBOX_CACHE.restored
+        )
+
     try:
-        analysis = await anyio.to_thread.run_sync(find_breakpoint, run_id)
+        analysis = await anyio.to_thread.run_sync(_run_critic)
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"critic failed: {e}")
